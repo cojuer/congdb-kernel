@@ -1,0 +1,7 @@
+#
+# CONGDB configuration
+#
+config CONGDB_MANAGER
+        tristate "Congestion database"
+        ---help---
+          Adds database with congestion algorithm choices for certain socket metrics.
