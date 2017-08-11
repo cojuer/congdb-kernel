@@ -17,28 +17,33 @@ enum congdb_nl_cmds {
     CONGDB_C_LIST_ENTRIES,
 
     // used to verify nl commands
-	__CONGDB_C_MAX,
-	CONGDB_C_MAX = __CONGDB_C_MAX - 1
+    __CONGDB_C_MAX,
+    CONGDB_C_MAX = __CONGDB_C_MAX - 1
 };
 
 enum congdb_nl_attrs {
-	CONGDB_A_UNSPEC,
+    CONGDB_A_UNSPEC,
     
     CONGDB_A_LOC_IP,
     CONGDB_A_REM_IP,
 
+    CONGDB_A_LOC_MASK,
+    CONGDB_A_REM_MASK,
+
+    CONGDB_A_PRIORITY,
+
     CONGDB_A_CA,
 
-	// used to verify nl attributes
-	__CONGDB_A_MAX,
-	CONGDB_A_MAX = __CONGDB_A_MAX - 1
+    // used to verify nl attributes
+    __CONGDB_A_MAX,
+    CONGDB_A_MAX = __CONGDB_A_MAX - 1
 };
 
 static struct genl_family congdb_genl_fam = {
-        .hdrsize = 0,
-        .name = "CONGDB_MANAGER",
-        .version = 1,
-        .maxattr = CONGDB_A_MAX,
+    .hdrsize = 0,
+    .name = "CONGDB_MANAGER",
+    .version = 1,
+    .maxattr = CONGDB_A_MAX,
 };
 
 /* Checks payload of the given attribute.
@@ -51,12 +56,12 @@ static struct genl_family congdb_genl_fam = {
  */
 static char* nla_get_id(struct nlattr *attr)
 {
-	char *val = (char*)nla_data(attr), *p = val;
-	if (!p || !*p) return NULL;
-	if (!isalpha(*p) && *p != '_') return NULL;
-	while (*++p) if (!isalnum(*p) && *p != '_') return NULL;
-	if (p - val > 50) return NULL;
-	return (char*) nla_data(attr);
+    char *val = (char*)nla_data(attr), *p = val;
+    if (!p || !*p) return NULL;
+    if (!isalpha(*p) && *p != '_') return NULL;
+    while (*++p) if (!isalnum(*p) && *p != '_') return NULL;
+    if (p - val > 50) return NULL;
+    return (char*) nla_data(attr);
 }
 
 /* Converts ipv4 string attribute to uint32_t.
@@ -64,82 +69,115 @@ static char* nla_get_id(struct nlattr *attr)
  */
 static uint32_t nla_get_ip(struct nlattr *attr)
 {
-	char *ip_str = (char*) nla_data(attr);
-	uint32_t ip;
-	if (!in4_pton(ip_str, -1, (u8*)&ip, -1, NULL))
-		return 0;
-	return ip;
+    char *ip_str = (char*) nla_data(attr);
+    uint32_t ip;
+    if (!in4_pton(ip_str, -1, (u8*)&ip, -1, NULL))
+        return 0;
+    return ip;
 }
 
 static int nla_put_congdb_data(struct sk_buff *skb, struct congdb_data *data)
 {
-	size_t i;
-	for(i = 0; i < data->size; ++i) {
-		if (nla_put_u32(skb, CONGDB_A_LOC_IP, data->entries[i].stats.loc_ip))
-			return -EFBIG;
-		if (nla_put_u32(skb, CONGDB_A_REM_IP, data->entries[i].stats.rem_ip))
-			return -EFBIG;
-		if (nla_put_string(skb, CONGDB_A_CA, data->entries[i].ca_name))
-			return -EFBIG;
-	}
-	return 0;
+    size_t i;
+    for(i = 0; i < data->size; ++i) {
+        if (nla_put_u32(skb, CONGDB_A_LOC_IP, data->entries[i].stats.loc_ip))
+            return -EFBIG;
+        if (nla_put_u32(skb, CONGDB_A_LOC_MASK, data->entries[i].stats.loc_mask))
+            return -EFBIG;
+        if (nla_put_u32(skb, CONGDB_A_REM_IP, data->entries[i].stats.rem_ip))
+            return -EFBIG;
+        if (nla_put_u32(skb, CONGDB_A_REM_MASK, data->entries[i].stats.rem_mask))
+            return -EFBIG;
+        if (nla_put_u8(skb, CONGDB_A_PRIORITY, data->entries[i].stats.priority))
+            return -EFBIG;
+        if (nla_put_string(skb, CONGDB_A_CA, data->entries[i].ca_name))
+            return -EFBIG;
+    }
+    return 0;
 }
 
 static int reply_congdb_data(struct genl_info *query_info,
-			                 struct congdb_data *data)
+                             struct congdb_data *data)
 {
-	struct sk_buff *reply;
-	void *genl_hdr;
+    struct sk_buff *reply;
+    void *genl_hdr;
 
-	reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
-	if (!reply) {
-		pr_warn("CONGDB: no memory to reply\n");
-		return -ENOMEM;
-	}
+    reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+    if (!reply) {
+        pr_warn("CONGDB: no memory to reply\n");
+        return -ENOMEM;
+    }
 
-	genl_hdr = genlmsg_put_reply(reply, query_info, &congdb_genl_fam,
-				                 0, CONGDB_C_LIST_ENTRIES);
-	if (!genl_hdr || nla_put_congdb_data(reply, data)) {
-		pr_warn("CONGDB: failed to compose reply\n");
-		kfree(reply);
-		return -EFBIG;
-	}
+    genl_hdr = genlmsg_put_reply(reply, query_info, &congdb_genl_fam,
+                                 0, CONGDB_C_LIST_ENTRIES);
+    if (!genl_hdr || nla_put_congdb_data(reply, data)) {
+        pr_warn("CONGDB: failed to compose reply\n");
+        kfree(reply);
+        return -EFBIG;
+    }
 
-	genlmsg_end(reply, genl_hdr);
-	if (genlmsg_reply(reply, query_info)) {
-		pr_warn("CONGDB: failed to send reply\n");
-		kfree(reply);
-		return -EIO;
-	}
-	return 0;
+    genlmsg_end(reply, genl_hdr);
+    if (genlmsg_reply(reply, query_info)) {
+        pr_warn("CONGDB: failed to send reply\n");
+        kfree(reply);
+        return -EIO;
+    }
+    return 0;
 }
 
 static int extract_tcp_data(struct nlattr **attrs, struct tcp_sock_data *sock_data)
 {
-    uint32_t loc_ip, rem_ip;
+    uint32_t loc_ip, loc_mask;
+    uint32_t rem_ip, rem_mask;
+    uint8_t priority;
 
     if (!attrs[CONGDB_A_LOC_IP]) {
         pr_warn("CONGDB: invalid local ip number\n");
         return -EINVAL;
     }
-	loc_ip = nla_get_u32(attrs[CONGDB_A_LOC_IP]);
-	if (!attrs[CONGDB_A_REM_IP]) {
+    loc_ip = nla_get_u32(attrs[CONGDB_A_LOC_IP]);
+    if (!attrs[CONGDB_A_LOC_MASK]) {
+        pr_warn("CONGDB: local mask not provided\n");
+        loc_mask = UINT_MAX;
+    } 
+    else {
+        loc_mask = nla_get_u32(attrs[CONGDB_A_LOC_MASK]);
+    }
+    if (!attrs[CONGDB_A_REM_IP]) {
         pr_warn("CONGDB: invalid remote ip number\n");
         return -EINVAL;
     }
     rem_ip = nla_get_u32(attrs[CONGDB_A_REM_IP]);
+    if (!attrs[CONGDB_A_REM_MASK]) {
+        pr_warn("CONGDB: remote mask not provided\n");
+        rem_mask = UINT_MAX;
+    } 
+    else {
+        rem_mask = nla_get_u32(attrs[CONGDB_A_REM_MASK]);
+    }
+    if (!attrs[CONGDB_A_PRIORITY]) {
+        pr_warn("CONGDB: priority not provided\n");
+        priority = 0;
+    } 
+    else {
+        priority = nla_get_u8(attrs[CONGDB_A_PRIORITY]);
+    }
 
-	sock_data->loc_ip = loc_ip;
+    sock_data->loc_ip = loc_ip;
+    sock_data->loc_mask = loc_mask;
     sock_data->rem_ip = rem_ip;
+    sock_data->rem_mask = rem_mask;
+    sock_data->priority = priority;
+
     return 0;
 }
 
 static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
 {
-	struct nlattr **attrs = info->attrs;
+    struct nlattr **attrs = info->attrs;
 
-	switch(info->genlhdr->cmd) {
-		case CONGDB_C_ADD_ENTRY:
+    switch(info->genlhdr->cmd) {
+        case CONGDB_C_ADD_ENTRY:
             {
                 char* name;
                 name = nla_get_id(attrs[CONGDB_A_CA]);
@@ -149,24 +187,24 @@ static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
                 }
                 struct tcp_sock_data tcp_data;
                 if (extract_tcp_data(attrs, &tcp_data)) {
-					return -1;
-				}
-			    return congdb_add_entry(&tcp_data, name);
+                    return -1;
+                }
+                return congdb_add_entry(&tcp_data, name);
             }
-		case CONGDB_C_DEL_ENTRY:
-			{
+        case CONGDB_C_DEL_ENTRY:
+            {
                 struct tcp_sock_data tcp_data;
                 if (extract_tcp_data(attrs, &tcp_data)) {
-					return -1;
-				}
-			    return congdb_del_entry(&tcp_data);
+                    return -1;
+                }
+                return congdb_del_entry(&tcp_data);
             }
-		case CONGDB_C_CLEAR_ENTRIES:
-			{
+        case CONGDB_C_CLEAR_ENTRIES:
+            {
                 congdb_clear_entries();
                 return 0;
             }
-		case CONGDB_C_LIST_ENTRIES:
+        case CONGDB_C_LIST_ENTRIES:
             {
                 struct congdb_data *data;
                 int result;
@@ -179,65 +217,68 @@ static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
                 
                 result = reply_congdb_data(info, data);
                 congdb_data_free(data);
-				return result;
+                return result;
             }
-		default:
-			pr_warn("CONGDB: unspecified command\n");
-	}
-	return 0;
+        default:
+            pr_warn("CONGDB: unspecified command\n");
+    }
+    return 0;
 }
 
 static struct nla_policy congdb_genl_policy[CONGDB_A_MAX + 1] = {
     [CONGDB_A_CA] = {.type = NLA_NUL_STRING, .len = 15},
-	[CONGDB_A_LOC_IP] = {.type = NLA_U32},
-	[CONGDB_A_REM_IP] = {.type = NLA_U32}
+    [CONGDB_A_LOC_IP] = {.type = NLA_U32},
+    [CONGDB_A_LOC_MASK] = {.type = NLA_U32},
+    [CONGDB_A_REM_IP] = {.type = NLA_U32},
+    [CONGDB_A_REM_MASK] = {.type = NLA_U32},
+    [CONGDB_A_PRIORITY] = {.type = NLA_U8}
 };
 
 static const struct genl_ops congdb_manager_ops[] = {
-	{
-		.cmd = CONGDB_C_ADD_ENTRY,
-		.policy = congdb_genl_policy,
-		.doit = cmd_op_on_database,
-	},
-	{
-		.cmd = CONGDB_C_DEL_ENTRY,
-		.policy = congdb_genl_policy,
-		.doit = cmd_op_on_database,
-	},
-	{
-		.cmd = CONGDB_C_CLEAR_ENTRIES,
-		.policy = congdb_genl_policy,
-		.doit = cmd_op_on_database,
-	},
-	{
-		.cmd = CONGDB_C_LIST_ENTRIES,
-		.policy = congdb_genl_policy,
-		.doit = cmd_op_on_database,
-	}
+    {
+        .cmd = CONGDB_C_ADD_ENTRY,
+        .policy = congdb_genl_policy,
+        .doit = cmd_op_on_database,
+    },
+    {
+        .cmd = CONGDB_C_DEL_ENTRY,
+        .policy = congdb_genl_policy,
+        .doit = cmd_op_on_database,
+    },
+    {
+        .cmd = CONGDB_C_CLEAR_ENTRIES,
+        .policy = congdb_genl_policy,
+        .doit = cmd_op_on_database,
+    },
+    {
+        .cmd = CONGDB_C_LIST_ENTRIES,
+        .policy = congdb_genl_policy,
+        .doit = cmd_op_on_database,
+    }
 };
 
 static int __init congdb_manager_init(void)
 {
-	congdb_genl_fam.ops = congdb_manager_ops;
-	congdb_genl_fam.n_ops = 4;
-	if (genl_register_family(&congdb_genl_fam)) {
-		pr_err("Congestion database: can not register netlink family\n");
-		return 1;
-	}
+    congdb_genl_fam.ops = congdb_manager_ops;
+    congdb_genl_fam.n_ops = 4;
+    if (genl_register_family(&congdb_genl_fam)) {
+        pr_err("Congestion database: can not register netlink family\n");
+        return 1;
+    }
 
-	//rcu_assign_pointer(congdb_tun_ops, &tun_ops);
-	synchronize_rcu();
+    //rcu_assign_pointer(congdb_tun_ops, &tun_ops);
+    synchronize_rcu();
 
-	return 0;
+    return 0;
 }
 
 static void __exit congdb_manager_exit(void)
 {
-	//rcu_assign_pointer(congdb_tun_ops, &congdb_tunnel_default);
-	synchronize_rcu();
+    //rcu_assign_pointer(congdb_tun_ops, &congdb_tunnel_default);
+    synchronize_rcu();
 
-	genl_unregister_family(&congdb_genl_fam);
-	congdb_clear_entries();
+    genl_unregister_family(&congdb_genl_fam);
+    congdb_clear_entries();
 }
 
 module_init(congdb_manager_init);

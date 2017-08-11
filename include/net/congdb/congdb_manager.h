@@ -6,7 +6,10 @@
 
 struct tcp_sock_data {
     uint32_t loc_ip;
+    uint32_t loc_mask;
     uint32_t rem_ip;
+    uint32_t rem_mask;
+    uint8_t  priority;
 };
 
 struct congdb_entry_data {
