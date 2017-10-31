@@ -8,6 +8,9 @@
 
 #include <linux/kprobes.h>
 
+static DEFINE_SPINLOCK(wrapper_list_lock);
+static LIST_HEAD(wrapper_list);
+
 struct sock_ca_stats
 {
     u32 rtt;
@@ -22,109 +25,95 @@ struct sock_ca_data
     struct sock_ca_stats stats;
 };
 
+#define PRIV_CA_SIZE ICSK_CA_PRIV_SIZE / sizeof(u64)
+#define PRIV_CA_ID PRIV_CA_SIZE - 1
+
+struct tcp_congestion_ops* get_priv_ca_ops(struct sock *sk)
+{
+    return ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID]->ops;
+}
+
 static void tcp_ca_wrapper_init(struct sock *sk)
 {
-    pr_err("init\n");
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    pr_err("kmalloc data\n");
-    sock_data = kmalloc(sizeof(*sock_data), GFP_KERNEL);
-    bool ecn_ca = false;
-    pr_err("get_key\n");
-    u32 key = tcp_ca_get_key_by_name("cubic", &ecn_ca);
-    pr_err("The key is %u", key);
-    sock_data->ops = IMPORTED(tcp_ca_find_key)(key);
-    pr_err("init cubic");
-    sock_data->ops->init(sk);
+    pr_info("init congestion\n");
+    struct sock_ca_data *sock_data;
+
+    ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
+    sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
+
+    struct tcp_congestion_ops *e;
+    list_for_each_entry_rcu(e, &wrapper_list, list) {
+		if (strcmp(e->name, "veno") == 0)
+			sock_data->ops = e;
+    }
+    get_priv_ca_ops(sk)->init(sk);
 }
 
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
+    struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
     if (ops->release)
         ops->release(sk);
 
+    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
     kfree(sock_data);
 }
 
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    
-    
-    return ops->ssthresh(sk);
+    return get_priv_ca_ops(sk)->ssthresh(sk);
+    return 0;
 }
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    ops->cong_avoid(sk, ack, acked);
+    get_priv_ca_ops(sk)->cong_avoid(sk, ack, acked);
 }
 
 void tcp_ca_wrapper_set_state(struct sock *sk, u8 new_state)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    ops->set_state(sk, new_state);
+    get_priv_ca_ops(sk)->set_state(sk, new_state);
 }
 
 void tcp_ca_wrapper_cwnd_event(struct sock *sk, enum tcp_ca_event ev)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    ops->cwnd_event(sk, ev);
+    get_priv_ca_ops(sk)->cwnd_event(sk, ev);
 }
 
 void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    ops->in_ack_event(sk, flags);
+    get_priv_ca_ops(sk)->in_ack_event(sk, flags);
 }
 
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    return ops->undo_cwnd(sk);
+    return get_priv_ca_ops(sk)->undo_cwnd(sk);
 }
 
 void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    ops->pkts_acked(sk, sample);
+    get_priv_ca_ops(sk)->pkts_acked(sk, sample);
 }
 
 u32 tcp_ca_wrapper_tso_segs_goal(struct sock *sk)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    return ops->tso_segs_goal(sk);
+    return get_priv_ca_ops(sk)->tso_segs_goal(sk);
 }
 
 u32 tcp_ca_wrapper_sndbuf_expand(struct sock *sk)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    return ops->sndbuf_expand(sk);
+    return get_priv_ca_ops(sk)->sndbuf_expand(sk);
 }
 
 void tcp_ca_wrapper_cong_control(struct sock *sk, const struct rate_sample *rs)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    ops->cong_control(sk, rs);
+    get_priv_ca_ops(sk)->cong_control(sk, rs);
 }
 
 size_t tcp_ca_wrapper_get_info(struct sock *sk, u32 ext, int *attr,
            union tcp_cc_info *info)
 {
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[11];
-    struct tcp_congestion_ops *ops = sock_data->ops;
-    return ops->get_info(sk, ext, attr, info);
+    return get_priv_ca_ops(sk)->get_info(sk, ext, attr, info);
 }
 
 static struct tcp_congestion_ops tcp_ca_wrapper __read_mostly = {
@@ -147,7 +136,31 @@ static struct tcp_congestion_ops tcp_ca_wrapper __read_mostly = {
 int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 {
     pr_info("register congestion control %s\n", ca->name);
+    int ret = 0;
     
+    if (!ca->ssthresh || !ca->undo_cwnd ||
+	    !(ca->cong_avoid || ca->cong_control)) {
+        jprobe_return();
+        return -EINVAL;
+    }
+    
+    spin_lock(&wrapper_list_lock);
+    
+    // copy to the new structure
+    struct tcp_congestion_ops* ca_copy = kmalloc(sizeof(*ca_copy), GFP_KERNEL);
+    *ca_copy = *ca;
+
+    // FIXME: check if was already registered
+    list_add_tail_rcu(&ca_copy->list, &wrapper_list);
+    pr_info("add to the list: %s", &ca_copy->name);
+
+    spin_unlock(&wrapper_list_lock);
+    
+    struct tcp_congestion_ops *e;
+    list_for_each_entry_rcu(e, &wrapper_list, list) {
+		pr_info("regd: %s\n", e->name);
+	}
+
     jprobe_return();
 
     return 0;
@@ -155,8 +168,17 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 
 void jtcp_unregister_congestion_control(struct tcp_congestion_ops *ca)
 {
-    pr_info("unregister congestion control %s\n", ca->name);
+    spin_lock(&wrapper_list_lock);
     
+    pr_info("del from the list: %s", &ca->name);
+	spin_unlock(&wrapper_list_lock);
+    pr_info("unregister congestion control %s\n", ca->name);
+
+    struct tcp_congestion_ops *e;
+    list_for_each_entry_rcu(e, &wrapper_list, list) {
+		pr_info("regd: %s\n", e->name);
+	}
+
     jprobe_return();
 }
 
