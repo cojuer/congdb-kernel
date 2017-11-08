@@ -183,7 +183,21 @@ out:
 
 void tcp_init_congestion_control(struct sock *sk)
 {
-	const struct inet_connection_sock *icsk = inet_csk(sk);
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+    pr_err("on init:\ndaddr = %u \nrcv_saddr = %u\n", sk->sk_daddr, sk->sk_rcv_saddr);
+	const char* cong_got = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
+	pr_err("cong got: %s", cong_got);
+    
+    struct tcp_congestion_ops *ca;
+
+	spin_lock(&tcp_cong_list_lock);
+	ca = tcp_ca_find(cong_got);
+	spin_unlock(&tcp_cong_list_lock);
+
+    icsk->icsk_ca_ops = ca;
+	icsk->icsk_ca_setsockopt = 1;
+	memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
 
 	tcp_sk(sk)->prior_ssthresh = 0;
 	if (icsk->icsk_ca_ops->init)
@@ -192,11 +206,6 @@ void tcp_init_congestion_control(struct sock *sk)
 		INET_ECN_xmit(sk);
 	else
 		INET_ECN_dontxmit(sk);
-	
-	pr_err("on init:\ndaddr = %u \nrcv_saddr = %u\n", sk->sk_daddr, sk->sk_rcv_saddr);
-	const char* cong_got = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
-	pr_err("cong got: %s", cong_got);
-	tcp_set_congestion_control(sk, cong_got);
 }
 
 static void tcp_reinit_congestion_control(struct sock *sk,

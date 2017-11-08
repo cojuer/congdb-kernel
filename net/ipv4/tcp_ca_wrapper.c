@@ -11,6 +11,9 @@
 static DEFINE_SPINLOCK(wrapper_list_lock);
 static LIST_HEAD(wrapper_list);
 
+static DEFINE_SPINLOCK(wrapper_ops_list_lock);
+static LIST_HEAD(wrapper_ops_list);
+
 struct sock_ca_stats
 {
     u32 rtt;
@@ -23,6 +26,12 @@ struct sock_ca_data
 {
     struct tcp_congestion_ops* ops;
     struct sock_ca_stats stats;
+};
+
+struct ops_wrapper
+{
+    struct list_head list;
+    struct tcp_congestion_ops* ops;
 };
 
 #define PRIV_CA_SIZE ICSK_CA_PRIV_SIZE / sizeof(u64)
@@ -40,6 +49,15 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
     sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
+
+    if (strcmp(inet_csk(sk)->icsk_ca_ops->name, "tcp_ca_wrapper") == 0)
+    {
+        struct ops_wrapper *a;
+        list_for_each_entry_rcu(a, &wrapper_ops_list, list) {
+            if (strcmp(a->ops->name, "veno") == 0)
+                inet_csk(sk)->icsk_ca_ops = a->ops;
+        }
+    }
 
     struct tcp_congestion_ops *e;
     list_for_each_entry_rcu(e, &wrapper_list, list) {
@@ -135,7 +153,6 @@ static struct tcp_congestion_ops tcp_ca_wrapper __read_mostly = {
 
 int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 {
-    pr_info("register congestion control %s\n", ca->name);
     int ret = 0;
     
     if (!ca->ssthresh || !ca->undo_cwnd ||
@@ -155,11 +172,36 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
     pr_info("add to the list: %s", &ca_copy->name);
 
     spin_unlock(&wrapper_list_lock);
+
+    spin_lock(&wrapper_ops_list_lock);
+
+    // create correct wrapper ops
+
+    struct ops_wrapper* ops_wrapper = kmalloc(sizeof(*ops_wrapper), GFP_KERNEL);
+    struct tcp_congestion_ops* wrap_ops = kmalloc(sizeof(*wrap_ops), GFP_KERNEL);
+    if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
+    if (ca->release) wrap_ops->release = tcp_ca_wrapper_release;
+    if (ca->cong_avoid) wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
+    if (ca->ssthresh) wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
+    if (ca->set_state) wrap_ops->set_state = tcp_ca_wrapper_set_state;
+    if (ca->cwnd_event) wrap_ops->cwnd_event = tcp_ca_wrapper_cwnd_event;
+    if (ca->in_ack_event) wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
+    if (ca->undo_cwnd) wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
+    if (ca->pkts_acked) wrap_ops->pkts_acked = tcp_ca_wrapper_pkts_acked;
+    if (ca->tso_segs_goal) wrap_ops->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;
+    if (ca->get_info) wrap_ops->get_info = tcp_ca_wrapper_get_info;
+    wrap_ops->owner = ca->owner;
+    strncpy(wrap_ops->name, "veno_wrapped", 13);
+    // strncpy(wrap_ops->name, ca->name, sizeof(ca->name));
+
+    ops_wrapper->ops = wrap_ops;
+
+    list_add_tail_rcu(&ops_wrapper->list, &wrapper_ops_list);
+    pr_info("add to the ops list: %s", &wrap_ops->name);
+
+    spin_unlock(&wrapper_ops_list_lock);
     
-    struct tcp_congestion_ops *e;
-    list_for_each_entry_rcu(e, &wrapper_list, list) {
-		pr_info("regd: %s\n", e->name);
-	}
+    pr_info("register congestion control %s\n", ca->name);
 
     jprobe_return();
 
@@ -172,12 +214,12 @@ void jtcp_unregister_congestion_control(struct tcp_congestion_ops *ca)
     
     pr_info("del from the list: %s", &ca->name);
 	spin_unlock(&wrapper_list_lock);
-    pr_info("unregister congestion control %s\n", ca->name);
 
-    struct tcp_congestion_ops *e;
-    list_for_each_entry_rcu(e, &wrapper_list, list) {
-		pr_info("regd: %s\n", e->name);
-	}
+    spin_lock(&wrapper_ops_list_lock);
+
+    spin_unlock(&wrapper_ops_list_lock);
+
+    pr_info("unregister congestion control %s\n", ca->name);
 
     jprobe_return();
 }
