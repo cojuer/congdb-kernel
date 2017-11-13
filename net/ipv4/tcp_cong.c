@@ -195,9 +195,11 @@ void tcp_init_congestion_control(struct sock *sk)
 	ca = tcp_ca_find(cong_got);
 	spin_unlock(&tcp_cong_list_lock);
 
-    icsk->icsk_ca_ops = ca;
-	icsk->icsk_ca_setsockopt = 1;
-	memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
+    if (try_module_get(ca->owner)) {
+        icsk->icsk_ca_ops = ca;
+	    icsk->icsk_ca_setsockopt = 1;
+        memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
+    }
 
 	tcp_sk(sk)->prior_ssthresh = 0;
 	if (icsk->icsk_ca_ops->init)

@@ -169,7 +169,7 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 
     // FIXME: check if was already registered
     list_add_tail_rcu(&ca_copy->list, &wrapper_list);
-    pr_info("add to the list: %s", &ca_copy->name);
+    pr_info("add to the list: %s", ca_copy->name);
 
     spin_unlock(&wrapper_list_lock);
 
@@ -180,24 +180,34 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
     struct ops_wrapper* ops_wrapper = kmalloc(sizeof(*ops_wrapper), GFP_KERNEL);
     struct tcp_congestion_ops* wrap_ops = kmalloc(sizeof(*wrap_ops), GFP_KERNEL);
     if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
+    else wrap_ops->init = NULL;
     if (ca->release) wrap_ops->release = tcp_ca_wrapper_release;
+    else wrap_ops->release = NULL;
     if (ca->cong_avoid) wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
+    else wrap_ops->cong_avoid = NULL;
     if (ca->ssthresh) wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
+    else wrap_ops->ssthresh = NULL;
     if (ca->set_state) wrap_ops->set_state = tcp_ca_wrapper_set_state;
+    else wrap_ops->set_state = NULL;
     if (ca->cwnd_event) wrap_ops->cwnd_event = tcp_ca_wrapper_cwnd_event;
+    else wrap_ops->cwnd_event = NULL;
     if (ca->in_ack_event) wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
+    else wrap_ops->in_ack_event = NULL;
     if (ca->undo_cwnd) wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
+    else wrap_ops->undo_cwnd = NULL;
     if (ca->pkts_acked) wrap_ops->pkts_acked = tcp_ca_wrapper_pkts_acked;
+    else wrap_ops->pkts_acked = NULL;
     if (ca->tso_segs_goal) wrap_ops->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;
+    else wrap_ops->tso_segs_goal = NULL;
     if (ca->get_info) wrap_ops->get_info = tcp_ca_wrapper_get_info;
-    wrap_ops->owner = ca->owner;
+    else wrap_ops->get_info = NULL;
+    wrap_ops->owner = THIS_MODULE;
     strncpy(wrap_ops->name, "veno_wrapped", 13);
-    // strncpy(wrap_ops->name, ca->name, sizeof(ca->name));
 
     ops_wrapper->ops = wrap_ops;
 
     list_add_tail_rcu(&ops_wrapper->list, &wrapper_ops_list);
-    pr_info("add to the ops list: %s", &wrap_ops->name);
+    pr_info("add to the ops list: %s", wrap_ops->name);
 
     spin_unlock(&wrapper_ops_list_lock);
     
@@ -212,7 +222,7 @@ void jtcp_unregister_congestion_control(struct tcp_congestion_ops *ca)
 {
     spin_lock(&wrapper_list_lock);
     
-    pr_info("del from the list: %s", &ca->name);
+    pr_info("del from the list: %s", ca->name);
 	spin_unlock(&wrapper_list_lock);
 
     spin_lock(&wrapper_ops_list_lock);
