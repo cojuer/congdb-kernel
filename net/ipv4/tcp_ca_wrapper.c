@@ -54,8 +54,10 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     {
         struct ops_wrapper *a;
         list_for_each_entry_rcu(a, &wrapper_ops_list, list) {
-            if (strcmp(a->ops->name, "veno") == 0)
+            if (strcmp(a->ops->name, "wrapped_veno") == 0) {
+                pr_err("use wrapped ops");
                 inet_csk(sk)->icsk_ca_ops = a->ops;
+            }
         }
     }
 
@@ -64,11 +66,14 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 		if (strcmp(e->name, "veno") == 0)
 			sock_data->ops = e;
     }
-    get_priv_ca_ops(sk)->init(sk);
+    struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
+    if (ops->init)
+        ops->init(sk);
 }
 
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
+    pr_info("release private sock data");
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
     if (ops->release)
         ops->release(sk);
@@ -80,7 +85,6 @@ static void tcp_ca_wrapper_release(struct sock *sk)
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 {
     return get_priv_ca_ops(sk)->ssthresh(sk);
-    return 0;
 }
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
@@ -136,16 +140,18 @@ size_t tcp_ca_wrapper_get_info(struct sock *sk, u32 ext, int *attr,
 
 static struct tcp_congestion_ops tcp_ca_wrapper __read_mostly = {
     .init		   = tcp_ca_wrapper_init,
-    //.release       = tcp_ca_wrapper_release,
+    .release       = tcp_ca_wrapper_release,
     .ssthresh	   = tcp_ca_wrapper_ssthresh,
     .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
     .set_state     = tcp_ca_wrapper_set_state,
     .cwnd_event	   = tcp_ca_wrapper_cwnd_event,
-    //.in_ack_event  = tcp_ca_wrapper_in_ack_event,
+    .in_ack_event  = tcp_ca_wrapper_in_ack_event,
 	.undo_cwnd	   = tcp_ca_wrapper_undo_cwnd,
     .pkts_acked	   = tcp_ca_wrapper_pkts_acked,
-    //.tso_segs_goal = tcp_ca_wrapper_tso_segs_goal,
-    //.get_info      = tcp_ca_wrapper_get_info,
+    .tso_segs_goal = tcp_ca_wrapper_tso_segs_goal,
+    .sndbuf_expand = tcp_ca_wrapper_sndbuf_expand,
+    .cong_control  = tcp_ca_wrapper_cong_control,
+    .get_info      = tcp_ca_wrapper_get_info,
 
 	.owner		   = THIS_MODULE,
 	.name		   = "tcp_ca_wrapper",
@@ -153,8 +159,6 @@ static struct tcp_congestion_ops tcp_ca_wrapper __read_mostly = {
 
 int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 {
-    int ret = 0;
-    
     if (!ca->ssthresh || !ca->undo_cwnd ||
 	    !(ca->cong_avoid || ca->cong_control)) {
         jprobe_return();
@@ -173,43 +177,51 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 
     spin_unlock(&wrapper_list_lock);
 
-    spin_lock(&wrapper_ops_list_lock);
+    if (strcmp(ca->name, "tcp_ca_wrapper") != 0) {
+        spin_lock(&wrapper_ops_list_lock);
 
-    // create correct wrapper ops
+        // create correct wrapper ops
 
-    struct ops_wrapper* ops_wrapper = kmalloc(sizeof(*ops_wrapper), GFP_KERNEL);
-    struct tcp_congestion_ops* wrap_ops = kmalloc(sizeof(*wrap_ops), GFP_KERNEL);
-    if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
-    else wrap_ops->init = NULL;
-    if (ca->release) wrap_ops->release = tcp_ca_wrapper_release;
-    else wrap_ops->release = NULL;
-    if (ca->cong_avoid) wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
-    else wrap_ops->cong_avoid = NULL;
-    if (ca->ssthresh) wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
-    else wrap_ops->ssthresh = NULL;
-    if (ca->set_state) wrap_ops->set_state = tcp_ca_wrapper_set_state;
-    else wrap_ops->set_state = NULL;
-    if (ca->cwnd_event) wrap_ops->cwnd_event = tcp_ca_wrapper_cwnd_event;
-    else wrap_ops->cwnd_event = NULL;
-    if (ca->in_ack_event) wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
-    else wrap_ops->in_ack_event = NULL;
-    if (ca->undo_cwnd) wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
-    else wrap_ops->undo_cwnd = NULL;
-    if (ca->pkts_acked) wrap_ops->pkts_acked = tcp_ca_wrapper_pkts_acked;
-    else wrap_ops->pkts_acked = NULL;
-    if (ca->tso_segs_goal) wrap_ops->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;
-    else wrap_ops->tso_segs_goal = NULL;
-    if (ca->get_info) wrap_ops->get_info = tcp_ca_wrapper_get_info;
-    else wrap_ops->get_info = NULL;
-    wrap_ops->owner = THIS_MODULE;
-    strncpy(wrap_ops->name, "veno_wrapped", 13);
+        struct ops_wrapper* ops_wrapper = kmalloc(sizeof(*ops_wrapper), GFP_KERNEL);
+        struct tcp_congestion_ops* wrap_ops = kmalloc(sizeof(*wrap_ops), GFP_KERNEL);
+        if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
+        else wrap_ops->init = NULL;
+        if (ca->release) wrap_ops->release = tcp_ca_wrapper_release;
+        else wrap_ops->release = NULL;    
+        if (ca->cong_avoid) wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
+        else wrap_ops->cong_avoid = NULL;
+        if (ca->ssthresh) wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
+        else wrap_ops->ssthresh = NULL;
+        if (ca->set_state) wrap_ops->set_state = tcp_ca_wrapper_set_state;
+        else wrap_ops->set_state = NULL;
+        if (ca->cwnd_event) wrap_ops->cwnd_event = tcp_ca_wrapper_cwnd_event;
+        else wrap_ops->cwnd_event = NULL;
+        if (ca->in_ack_event) wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
+        else wrap_ops->in_ack_event = NULL;
+        if (ca->undo_cwnd) wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
+        else wrap_ops->undo_cwnd = NULL;
+        if (ca->pkts_acked) wrap_ops->pkts_acked = tcp_ca_wrapper_pkts_acked;
+        else wrap_ops->pkts_acked = NULL;
+        if (ca->tso_segs_goal) wrap_ops->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;
+        else wrap_ops->tso_segs_goal = NULL;
+        if (ca->get_info) wrap_ops->get_info = tcp_ca_wrapper_get_info;
+        else wrap_ops->get_info = NULL;
+        if (ca->sndbuf_expand) wrap_ops->sndbuf_expand = tcp_ca_wrapper_sndbuf_expand;
+        else wrap_ops->sndbuf_expand = NULL;
+        if (ca->cong_control) wrap_ops->cong_control = tcp_ca_wrapper_cong_control;
+        else wrap_ops->cong_control = NULL;
+        wrap_ops->owner = THIS_MODULE;
+        wrap_ops->key = ca->key;
+        wrap_ops->flags = ca->flags;
+        strncpy(wrap_ops->name, "wrapped_veno", 13);
 
-    ops_wrapper->ops = wrap_ops;
+        ops_wrapper->ops = wrap_ops;
 
-    list_add_tail_rcu(&ops_wrapper->list, &wrapper_ops_list);
-    pr_info("add to the ops list: %s", wrap_ops->name);
+        list_add_tail_rcu(&ops_wrapper->list, &wrapper_ops_list);
+        pr_info("add to the ops list: %s", wrap_ops->name);
 
-    spin_unlock(&wrapper_ops_list_lock);
+        spin_unlock(&wrapper_ops_list_lock);
+    }
     
     pr_info("register congestion control %s\n", ca->name);
 
