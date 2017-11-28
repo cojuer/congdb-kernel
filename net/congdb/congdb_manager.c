@@ -34,6 +34,10 @@ enum congdb_nl_attrs {
 
     CONGDB_A_CA,
 
+    CONGDB_A_ACKS_NUM,
+    CONGDB_A_LOSS_NUM,
+    CONGDB_A_RTT,
+
     // used to verify nl attributes
     __CONGDB_A_MAX,
     CONGDB_A_MAX = __CONGDB_A_MAX - 1
@@ -80,17 +84,23 @@ static int nla_put_congdb_data(struct sk_buff *skb, struct congdb_data *data)
 {
     size_t i;
     for(i = 0; i < data->size; ++i) {
-        if (nla_put_u32(skb, CONGDB_A_LOC_IP, data->entries[i].stats.loc_ip))
+        if (nla_put_u32(skb, CONGDB_A_LOC_IP, data->entries[i].id.loc_ip))
             return -EFBIG;
-        if (nla_put_u32(skb, CONGDB_A_LOC_MASK, data->entries[i].stats.loc_mask))
+        if (nla_put_u32(skb, CONGDB_A_LOC_MASK, data->entries[i].id.loc_mask))
             return -EFBIG;
-        if (nla_put_u32(skb, CONGDB_A_REM_IP, data->entries[i].stats.rem_ip))
+        if (nla_put_u32(skb, CONGDB_A_REM_IP, data->entries[i].id.rem_ip))
             return -EFBIG;
-        if (nla_put_u32(skb, CONGDB_A_REM_MASK, data->entries[i].stats.rem_mask))
+        if (nla_put_u32(skb, CONGDB_A_REM_MASK, data->entries[i].id.rem_mask))
             return -EFBIG;
-        if (nla_put_u8(skb, CONGDB_A_PRIORITY, data->entries[i].stats.priority))
+        if (nla_put_u8(skb, CONGDB_A_PRIORITY, data->entries[i].id.priority))
             return -EFBIG;
         if (nla_put_string(skb, CONGDB_A_CA, data->entries[i].ca_name))
+            return -EFBIG;
+        if (nla_put_u32(skb, CONGDB_A_ACKS_NUM, data->entries[i].stats.acks_num))
+            return -EFBIG;
+        if (nla_put_u32(skb, CONGDB_A_LOSS_NUM, data->entries[i].stats.loss_num))
+            return -EFBIG;
+        if (nla_put_u32(skb, CONGDB_A_RTT, data->entries[i].stats.rtt))
             return -EFBIG;
     }
     return 0;
@@ -125,7 +135,7 @@ static int reply_congdb_data(struct genl_info *query_info,
     return 0;
 }
 
-static int extract_tcp_data(struct nlattr **attrs, struct tcp_sock_data *sock_data)
+static int extract_tcp_data(struct nlattr **attrs, struct rule_id *id)
 {
     uint32_t loc_ip, loc_mask;
     uint32_t rem_ip, rem_mask;
@@ -163,11 +173,11 @@ static int extract_tcp_data(struct nlattr **attrs, struct tcp_sock_data *sock_da
         priority = nla_get_u8(attrs[CONGDB_A_PRIORITY]);
     }
 
-    sock_data->loc_ip = loc_ip;
-    sock_data->loc_mask = loc_mask;
-    sock_data->rem_ip = rem_ip;
-    sock_data->rem_mask = rem_mask;
-    sock_data->priority = priority;
+    id->loc_ip = loc_ip;
+    id->loc_mask = loc_mask;
+    id->rem_ip = rem_ip;
+    id->rem_mask = rem_mask;
+    id->priority = priority;
 
     return 0;
 }
@@ -185,19 +195,19 @@ static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
                     pr_warn("CONGDB: invalid congestion algorithm name\n");
                     return -EINVAL;
                 }
-                struct tcp_sock_data tcp_data;
-                if (extract_tcp_data(attrs, &tcp_data)) {
+                struct rule_id id;
+                if (extract_tcp_data(attrs, &id)) {
                     return -1;
                 }
-                return congdb_add_entry(&tcp_data, name);
+                return congdb_add_entry(&id, name);
             }
         case CONGDB_C_DEL_ENTRY:
             {
-                struct tcp_sock_data tcp_data;
-                if (extract_tcp_data(attrs, &tcp_data)) {
+                struct rule_id id;
+                if (extract_tcp_data(attrs, &id)) {
                     return -1;
                 }
-                return congdb_del_entry(&tcp_data);
+                return congdb_del_entry(&id);
             }
         case CONGDB_C_CLEAR_ENTRIES:
             {
@@ -231,7 +241,10 @@ static struct nla_policy congdb_genl_policy[CONGDB_A_MAX + 1] = {
     [CONGDB_A_LOC_MASK] = {.type = NLA_U32},
     [CONGDB_A_REM_IP] = {.type = NLA_U32},
     [CONGDB_A_REM_MASK] = {.type = NLA_U32},
-    [CONGDB_A_PRIORITY] = {.type = NLA_U8}
+    [CONGDB_A_PRIORITY] = {.type = NLA_U8},
+    [CONGDB_A_ACKS_NUM] = {.type = NLA_U32},
+    [CONGDB_A_LOSS_NUM] = {.type = NLA_U32},
+    [CONGDB_A_RTT] = {.type = NLA_U32},
 };
 
 static const struct genl_ops congdb_manager_ops[] = {
@@ -260,7 +273,7 @@ static const struct genl_ops congdb_manager_ops[] = {
 static int __init congdb_manager_init(void)
 {
     congdb_genl_fam.ops = congdb_manager_ops;
-    congdb_genl_fam.n_ops = 4;
+    congdb_genl_fam.n_ops = CONGDB_C_MAX + 1;
     if (genl_register_family(&congdb_genl_fam)) {
         pr_err("Congestion database: can not register netlink family\n");
         return 1;

@@ -16,10 +16,8 @@ static LIST_HEAD(wrapper_ops_list);
 
 struct sock_ca_stats
 {
-    u32 rtt;
-    u32 bandwidth;
-    u32 loss;
-    u32 duration;
+    u32 acks_num;
+    u32 loss_num;
 };
 
 struct sock_ca_data
@@ -37,6 +35,11 @@ struct ops_wrapper
 #define PRIV_CA_SIZE ICSK_CA_PRIV_SIZE / sizeof(u64)
 #define PRIV_CA_ID PRIV_CA_SIZE - 1
 
+struct sock_ca_stats* get_priv_ca_stats(struct sock *sk)
+{
+    return &((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID]->stats;
+}
+
 struct tcp_congestion_ops* get_priv_ca_ops(struct sock *sk)
 {
     return ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID]->ops;
@@ -49,6 +52,9 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
     sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
+
+    get_priv_ca_stats(sk)->acks_num = 0;
+    get_priv_ca_stats(sk)->loss_num = 0;
 
     if (strcmp(inet_csk(sk)->icsk_ca_ops->name, "tcp_ca_wrapper") == 0)
     {
@@ -74,16 +80,20 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
     pr_info("release private sock data");
+    pr_info("acks number: %u", get_priv_ca_stats(sk)->acks_num);
+    pr_info("loss number: %u", get_priv_ca_stats(sk)->loss_num);
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
     if (ops->release)
         ops->release(sk);
 
     struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
     kfree(sock_data);
+    pr_info("session ended");
 }
 
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 {
+    get_priv_ca_stats(sk)->loss_num += 1;
     return get_priv_ca_ops(sk)->ssthresh(sk);
 }
 
@@ -104,7 +114,11 @@ void tcp_ca_wrapper_cwnd_event(struct sock *sk, enum tcp_ca_event ev)
 
 void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags)
 {
-    get_priv_ca_ops(sk)->in_ack_event(sk, flags);
+    get_priv_ca_stats(sk)->acks_num += 1;
+
+    struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
+    if (ops->in_ack_event)
+        ops->in_ack_event(sk, flags);
 }
 
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk)
@@ -186,20 +200,15 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
         struct tcp_congestion_ops* wrap_ops = kmalloc(sizeof(*wrap_ops), GFP_KERNEL);
         if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
         else wrap_ops->init = NULL;
-        if (ca->release) wrap_ops->release = tcp_ca_wrapper_release;
-        else wrap_ops->release = NULL;    
-        if (ca->cong_avoid) wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
-        else wrap_ops->cong_avoid = NULL;
-        if (ca->ssthresh) wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
-        else wrap_ops->ssthresh = NULL;
+        wrap_ops->release = tcp_ca_wrapper_release;  
+        wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
+        wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
         if (ca->set_state) wrap_ops->set_state = tcp_ca_wrapper_set_state;
         else wrap_ops->set_state = NULL;
         if (ca->cwnd_event) wrap_ops->cwnd_event = tcp_ca_wrapper_cwnd_event;
         else wrap_ops->cwnd_event = NULL;
-        if (ca->in_ack_event) wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
-        else wrap_ops->in_ack_event = NULL;
-        if (ca->undo_cwnd) wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
-        else wrap_ops->undo_cwnd = NULL;
+        wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
+        wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
         if (ca->pkts_acked) wrap_ops->pkts_acked = tcp_ca_wrapper_pkts_acked;
         else wrap_ops->pkts_acked = NULL;
         if (ca->tso_segs_goal) wrap_ops->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;

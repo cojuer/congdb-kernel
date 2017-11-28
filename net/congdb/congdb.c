@@ -10,7 +10,8 @@ static LIST_HEAD(entries);
 
 struct congdb_entry {
     struct list_head lnode;
-    struct tcp_sock_data stats;
+    struct rule_id id;
+    struct rule_stats stats;
     char* ca_name;
 };
 
@@ -19,22 +20,22 @@ bool match_ipv4(uint32_t ip_to_test, uint32_t ip, uint32_t mask)
     return ((ip_to_test & mask) == (ip & mask));
 }
 
-static struct congdb_entry* __find_entry(struct tcp_sock_data *tcp_data)
+static struct congdb_entry* __find_entry(struct rule_id *id)
 {
     struct congdb_entry *entry;
     list_for_each_entry(entry, &entries, lnode) {
-        if (match_ipv4(entry->stats.loc_ip, tcp_data->loc_ip, tcp_data->loc_mask) &&
-            match_ipv4(entry->stats.rem_ip, tcp_data->rem_ip, tcp_data->rem_mask) &&
-            entry->stats.priority == tcp_data->priority) return entry;
+        if (match_ipv4(entry->id.loc_ip, id->loc_ip, id->loc_mask) &&
+            match_ipv4(entry->id.rem_ip, id->rem_ip, id->rem_mask) &&
+            entry->id.priority == id->priority) return entry;
     }
     return NULL;
 }
 
-int congdb_add_entry(struct tcp_sock_data *tcp_data, char* ca)
+int congdb_add_entry(struct rule_id *id, char* ca)
 {
     int status = -1;
     spin_lock(&data_lock);
-    if (__find_entry(tcp_data)) {
+    if (__find_entry(id)) {
         // TODO: write all data in error
         pr_err("CONGDB: entry already exists\n");
     } else {
@@ -43,7 +44,8 @@ int congdb_add_entry(struct tcp_sock_data *tcp_data, char* ca)
 
         if (new_entry && ca_name) {
             new_entry->ca_name = strcpy(ca_name, ca);
-            new_entry->stats = *tcp_data;
+            new_entry->id = *id;
+            memset(&new_entry->stats, 0, sizeof(new_entry->stats));
             list_add(&new_entry->lnode, &entries);
             status = 0;
         } else {
@@ -63,12 +65,12 @@ void __del_entry(struct congdb_entry *entry)
     kfree(entry);
 }
 
-int congdb_del_entry(struct tcp_sock_data *tcp_data)
+int congdb_del_entry(struct rule_id *id)
 {
     int status = -1;
     spin_lock(&data_lock);
 
-    struct congdb_entry *entry = __find_entry(tcp_data);
+    struct congdb_entry *entry = __find_entry(id);
     if (!entry) {
         // TODO: write all data in error
         pr_err("CONGDB: entry does not exist\n");
@@ -84,7 +86,7 @@ const char* congdb_get_entry(uint32_t loc_ip, uint32_t rem_ip)
 {
     int status = -1;
 
-    struct tcp_sock_data stats = {
+    struct rule_id id = {
         .loc_ip = loc_ip,
         .loc_mask = UINT_MAX,
         .rem_ip = rem_ip,
@@ -95,7 +97,7 @@ const char* congdb_get_entry(uint32_t loc_ip, uint32_t rem_ip)
     spin_lock(&data_lock);
 
     char* ca = NULL;
-    struct congdb_entry *entry = __find_entry(&stats);
+    struct congdb_entry *entry = __find_entry(&id);
     if (!entry) {
         pr_err("CONGDB: entry does not exist\n");
         spin_unlock(&data_lock);
@@ -157,6 +159,7 @@ struct congdb_data* congdb_list_entries()
             if (name) {
                 --index;
                 data->entries[index].ca_name = strcpy(name, entry->ca_name);
+                data->entries[index].id = entry->id;
                 data->entries[index].stats = entry->stats;
             } else {
                 pr_err("CONGDB: cannot allocate memory for entries list\n");
