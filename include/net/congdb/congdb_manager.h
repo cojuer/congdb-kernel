@@ -40,5 +40,6 @@ struct congdb_data* congdb_list_entries(void);
 
 //TEST
 const char* congdb_get_entry(uint32_t loc_ip, uint32_t rem_ip);
+void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats);
 
 #endif

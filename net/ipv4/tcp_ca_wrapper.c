@@ -16,8 +16,9 @@ static LIST_HEAD(wrapper_ops_list);
 
 struct sock_ca_stats
 {
-    u32 acks_num;
-    u32 loss_num;
+    uint32_t acks_num;
+    uint32_t loss_num;
+    uint32_t rtt;
 };
 
 struct sock_ca_data
@@ -53,8 +54,8 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
     sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
 
-    get_priv_ca_stats(sk)->acks_num = 0;
-    get_priv_ca_stats(sk)->loss_num = 0;
+    struct sock_ca_stats *stats = get_priv_ca_stats(sk);
+    memset(stats, 0, sizeof(*stats));
 
     if (strcmp(inet_csk(sk)->icsk_ca_ops->name, "tcp_ca_wrapper") == 0)
     {
@@ -77,11 +78,15 @@ static void tcp_ca_wrapper_init(struct sock *sk)
         ops->init(sk);
 }
 
+extern void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats);
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
     pr_info("release private sock data");
     pr_info("acks number: %u", get_priv_ca_stats(sk)->acks_num);
     pr_info("loss number: %u", get_priv_ca_stats(sk)->loss_num);
+    pr_info("rtt size: %u", get_priv_ca_stats(sk)->rtt);
+    congdb_aggregate_stats(sk->sk_rcv_saddr, sk->sk_daddr, get_priv_ca_stats(sk));
+
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
     if (ops->release)
         ops->release(sk);

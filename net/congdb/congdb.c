@@ -113,6 +113,33 @@ const char* congdb_get_entry(uint32_t loc_ip, uint32_t rem_ip)
     return ca;
 }
 
+void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats)
+{
+    struct rule_stats *stats_to_agg = (struct rule_stats*)stats;
+    struct rule_id id = {
+        .loc_ip = loc_ip,
+        .loc_mask = UINT_MAX,
+        .rem_ip = rem_ip,
+        .rem_mask = UINT_MAX,
+        .priority = 0
+    };
+
+    spin_lock(&data_lock);
+
+    char* ca = NULL;
+    struct congdb_entry *entry = __find_entry(&id);
+    if (!entry) {
+        pr_err("CONGDB: no rule for socket statistics");
+    } else {
+        entry->stats.acks_num = entry->stats.acks_num * 9 / 10 + stats_to_agg->acks_num / 10;
+        entry->stats.loss_num = entry->stats.loss_num * 9 / 10 + stats_to_agg->loss_num / 10;
+        entry->stats.rtt = entry->stats.rtt * 9 / 10 + stats_to_agg->rtt / 10;
+        pr_info("CONGDB: statistics aggregation succeded");
+    }
+    spin_unlock(&data_lock);
+}
+EXPORT_SYMBOL_GPL(congdb_aggregate_stats);
+
 void congdb_clear_entries()
 {
     struct congdb_entry *entry, *tmp;
