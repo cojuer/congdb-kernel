@@ -5,6 +5,7 @@
 
 #include <net/tcp.h>
 #include <net/congdb/tcp_ca_wrapper.h>
+#include <net/congdb/congdb_manager.h>
 
 #include <linux/kprobes.h>
 
@@ -36,7 +37,7 @@ struct ops_wrapper
 extern void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked);
 extern u32 tcp_reno_ssthresh(struct sock *sk);
 extern u32 tcp_reno_undo_cwnd(struct sock *sk);
-struct tcp_congestion_ops wr_reno = {
+static struct tcp_congestion_ops wr_reno = {
 	.flags		= TCP_CONG_NON_RESTRICTED,
 	.name		= "wr_reno",
 	.owner		= THIS_MODULE,
@@ -55,7 +56,6 @@ static struct tcp_congestion_ops reno_wrapper = {
     .release       = tcp_ca_wrapper_release,
     .ssthresh	   = tcp_ca_wrapper_ssthresh,
     .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
-    .in_ack_event  = tcp_ca_wrapper_in_ack_event,
 	.undo_cwnd	   = tcp_ca_wrapper_undo_cwnd,
     
     .flags         = TCP_CONG_NON_RESTRICTED,
@@ -78,9 +78,13 @@ struct tcp_congestion_ops* get_priv_ca_ops(struct sock *sk)
 
 static void tcp_ca_wrapper_init(struct sock *sk)
 {
-    pr_info("init congestion\n");
+    pr_info("CAWR: init tcp_ca_wrapper\n");
+    const char *ca_name = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
+
     struct sock_ca_data *sock_data;
 
+    struct inet_connection_sock *icsk = inet_csk(sk);
+    memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
     sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
 
@@ -88,21 +92,27 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     memset(stats, 0, sizeof(*stats));
 
     bool ca_found = false;
-    // TODO: delete if??
-    if (strcmp(inet_csk(sk)->icsk_ca_ops->name, "tcp_ca_wrapper") == 0)
-    {
-        struct ops_wrapper *a;
-        list_for_each_entry_rcu(a, &wrapper_ops_list, list) {
-            if (strcmp(a->ops->name, "wrapped_veno") == 0) {
-                pr_info("CAWR: use wrapped ops\n");
-                inet_csk(sk)->icsk_ca_ops = a->ops;
-                ca_found = true;
-            }
+    
+    // allocate name to find wrapper 
+    // example: reno -> wr_reno
+    char *ca_wr_name = kmalloc(4 + strlen(ca_name), GFP_KERNEL);
+    strcpy(ca_wr_name, "wr_");
+    strcat(ca_wr_name, ca_name);
+
+    struct ops_wrapper *a;
+    list_for_each_entry_rcu(a, &wrapper_ops_list, list) {
+        if (strcmp(a->ops->name, ca_wr_name) == 0) {
+            pr_info("CAWR: found ops for %s\n", ca_wr_name);
+            inet_csk(sk)->icsk_ca_ops = a->ops;
+            ca_found = true;
         }
     }
+
+    kfree(ca_wr_name);
+
     struct tcp_congestion_ops *e;
     list_for_each_entry_rcu(e, &wrapper_list, list) {
-		if (strcmp(e->name, "veno") == 0) {
+		if (strcmp(e->name, ca_name) == 0) {
             sock_data->ops = e;
         }
     }
@@ -111,7 +121,7 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     {
         inet_csk(sk)->icsk_ca_ops = &reno_wrapper;
         sock_data->ops = &wr_reno;
-        pr_info("CAWR: congestion not found, using reno\n");
+        pr_info("CAWR: ops not found, using reno\n");
     }
 
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
@@ -139,13 +149,16 @@ static void tcp_ca_wrapper_release(struct sock *sk)
 
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 {
-    get_priv_ca_stats(sk)->loss_num += 1;
-    return get_priv_ca_ops(sk)->ssthresh(sk);
+    if (get_priv_ca_ops(sk)->ssthresh)
+        return get_priv_ca_ops(sk)->ssthresh(sk);
+    else return tcp_reno_ssthresh(sk);
 }
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
-    get_priv_ca_ops(sk)->cong_avoid(sk, ack, acked);
+    if (get_priv_ca_ops(sk)->cong_avoid)
+        get_priv_ca_ops(sk)->cong_avoid(sk, ack, acked);
+    else tcp_reno_cong_avoid(sk, ack, acked);
 }
 
 void tcp_ca_wrapper_set_state(struct sock *sk, u8 new_state)
@@ -169,7 +182,11 @@ void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags)
 
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk)
 {
-    return get_priv_ca_ops(sk)->undo_cwnd(sk);
+    get_priv_ca_stats(sk)->loss_num += 1;
+    
+    if (get_priv_ca_ops(sk)->undo_cwnd)
+        return get_priv_ca_ops(sk)->undo_cwnd(sk);
+    else return tcp_reno_undo_cwnd(sk);
 }
 
 void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
@@ -203,15 +220,7 @@ static struct tcp_congestion_ops tcp_ca_wrapper __read_mostly = {
     .release       = tcp_ca_wrapper_release,
     .ssthresh	   = tcp_ca_wrapper_ssthresh,
     .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
-    .set_state     = tcp_ca_wrapper_set_state,
-    .cwnd_event	   = tcp_ca_wrapper_cwnd_event,
-    .in_ack_event  = tcp_ca_wrapper_in_ack_event,
 	.undo_cwnd	   = tcp_ca_wrapper_undo_cwnd,
-    .pkts_acked	   = tcp_ca_wrapper_pkts_acked,
-    .tso_segs_goal = tcp_ca_wrapper_tso_segs_goal,
-    .sndbuf_expand = tcp_ca_wrapper_sndbuf_expand,
-    .cong_control  = tcp_ca_wrapper_cong_control,
-    .get_info      = tcp_ca_wrapper_get_info,
 
 	.owner		   = THIS_MODULE,
 	.name		   = "tcp_ca_wrapper",
@@ -257,7 +266,8 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
         wrap_ops->owner = THIS_MODULE;
         wrap_ops->key = ca->key;
         wrap_ops->flags = ca->flags;
-        strncpy(wrap_ops->name, "wrapped_veno", 13);
+        strncpy(wrap_ops->name, "wr_", 4);
+        strncpy(wrap_ops->name + 3, ca->name, strlen(ca->name) + 1);
         
         // optional
         if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
