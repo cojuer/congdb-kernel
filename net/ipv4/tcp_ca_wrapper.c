@@ -9,11 +9,11 @@
 
 #include <linux/kprobes.h>
 
-static DEFINE_SPINLOCK(wrapper_list_lock);
-static LIST_HEAD(wrapper_list);
+static DEFINE_SPINLOCK(inner_cas_list_lock);
+static LIST_HEAD(inner_cas_list);
 
-static DEFINE_SPINLOCK(wrapper_ops_list_lock);
-static LIST_HEAD(wrapper_ops_list);
+static DEFINE_SPINLOCK(wrappers_list_lock);
+static LIST_HEAD(wrappers_list);
 
 struct sock_ca_stats
 {
@@ -34,25 +34,28 @@ struct ops_wrapper
     struct tcp_congestion_ops* ops;
 };
 
+// create copy of standard reno algorithm
 extern void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked);
 extern u32 tcp_reno_ssthresh(struct sock *sk);
 extern u32 tcp_reno_undo_cwnd(struct sock *sk);
-static struct tcp_congestion_ops wr_reno = {
-	.flags		= TCP_CONG_NON_RESTRICTED,
-	.name		= "wr_reno",
-	.owner		= THIS_MODULE,
+
+static struct tcp_congestion_ops reno = {
 	.ssthresh	= tcp_reno_ssthresh,
 	.cong_avoid	= tcp_reno_cong_avoid,
 	.undo_cwnd	= tcp_reno_undo_cwnd,
+
+    .flags		= TCP_CONG_NON_RESTRICTED,
+	.owner		= THIS_MODULE,
+    .name		= "reno",
 };
 
+// create wrapper for reno
 static void tcp_ca_wrapper_release(struct sock *sk);
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk);
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked);
-void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags);
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk);
 
-static struct tcp_congestion_ops reno_wrapper = {
+static struct tcp_congestion_ops wr_reno = {
     .release       = tcp_ca_wrapper_release,
     .ssthresh	   = tcp_ca_wrapper_ssthresh,
     .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
@@ -60,11 +63,16 @@ static struct tcp_congestion_ops reno_wrapper = {
     
     .flags         = TCP_CONG_NON_RESTRICTED,
 	.owner		   = THIS_MODULE,
-	.name		   = "tcp_ca_wrapper",
+	.name		   = "wr_reno",
 };
 
 #define PRIV_CA_SIZE ICSK_CA_PRIV_SIZE / sizeof(u64)
 #define PRIV_CA_ID PRIV_CA_SIZE - 1
+
+struct sock_ca_data* get_priv_ca_data(struct sock *sk)
+{
+    return &((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
+}
 
 struct sock_ca_stats* get_priv_ca_stats(struct sock *sk)
 {
@@ -78,50 +86,56 @@ struct tcp_congestion_ops* get_priv_ca_ops(struct sock *sk)
 
 static void tcp_ca_wrapper_init(struct sock *sk)
 {
-    pr_info("CAWR: init tcp_ca_wrapper\n");
-    const char *ca_name = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
-
-    struct sock_ca_data *sock_data;
+    pr_info("CAWR: init tcp_ca_wrapper");
+    const char *inner_ca_name = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
 
     struct inet_connection_sock *icsk = inet_csk(sk);
-    memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
+    // allocate memory for socket data
+    struct sock_ca_data *sock_data = get_priv_ca_data(sk);
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
-    sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
-
+    
+    // set all statiscits to zeroes
     struct sock_ca_stats *stats = get_priv_ca_stats(sk);
     memset(stats, 0, sizeof(*stats));
 
-    bool ca_found = false;
+    bool wrapper_found = false;
+    bool inner_ca_found = false;
     
     // allocate name to find wrapper 
     // example: reno -> wr_reno
-    char *ca_wr_name = kmalloc(4 + strlen(ca_name), GFP_KERNEL);
-    strcpy(ca_wr_name, "wr_");
-    strcat(ca_wr_name, ca_name);
+    char *wrapper_name = kmalloc(4 + strlen(inner_ca_name), GFP_KERNEL);
+    strcpy(wrapper_name, "wr_");
+    strcat(wrapper_name, inner_ca_name);
 
+    // look for wrapper
     struct ops_wrapper *a;
-    list_for_each_entry_rcu(a, &wrapper_ops_list, list) {
-        if (strcmp(a->ops->name, ca_wr_name) == 0) {
-            pr_info("CAWR: found ops for %s\n", ca_wr_name);
+    list_for_each_entry_rcu(a, &wrappers_list, list) {
+        if (strcmp(a->ops->name, wrapper_name) == 0) {
+            pr_info("CAWR: use wrapper \"%s\"", wrapper_name);
             inet_csk(sk)->icsk_ca_ops = a->ops;
-            ca_found = true;
+            wrapper_found = true;
         }
     }
-
     kfree(ca_wr_name);
 
-    struct tcp_congestion_ops *e;
-    list_for_each_entry_rcu(e, &wrapper_list, list) {
-		if (strcmp(e->name, ca_name) == 0) {
-            sock_data->ops = e;
+    // look for inner ca
+    if (wrapper_found) {
+        struct tcp_congestion_ops *e;
+        list_for_each_entry_rcu(e, &inner_cas_list, list) {
+            if (strcmp(e->name, inner_ca_name) == 0) {
+                pr_info("CAWR: use inner \"%s\"", wrapper_name);
+                sock_data->ops = e;
+                inner_ca_found = true;
+            }
         }
     }
 
-    if (!ca_found)
+    // set reno if wrapper or inner ca not found
+    if (!wrapper_found || !inner_ca_found)
     {
-        inet_csk(sk)->icsk_ca_ops = &reno_wrapper;
-        sock_data->ops = &wr_reno;
-        pr_info("CAWR: ops not found, using reno\n");
+        pr_err("CAWR: wrapper or inner ca not found, using reno");
+        inet_csk(sk)->icsk_ca_ops = &wr_reno;
+        sock_data->ops = &reno;
     }
 
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
@@ -132,19 +146,27 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 extern void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats);
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
-    pr_info("release private sock data");
-    pr_info("acks number: %u", get_priv_ca_stats(sk)->acks_num);
-    pr_info("loss number: %u", get_priv_ca_stats(sk)->loss_num);
-    pr_info("rtt size: %u", get_priv_ca_stats(sk)->rtt);
+    struct sock_ca_data *sock_data = get_priv_ca_data(sk);
+    if (sock_data == NULL)
+    {
+        pr_err("CAWR: sock data has been released");
+        return;
+    }
+
+    pr_info("CAWR: release private sock data");
+
+    // aggregate statistics
     congdb_aggregate_stats(sk->sk_rcv_saddr, sk->sk_daddr, get_priv_ca_stats(sk));
 
+    // release inner congestion algorithm
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
     if (ops->release)
         ops->release(sk);
 
-    struct sock_ca_data *sock_data = ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
+    // free allocated sock data
     kfree(sock_data);
-    pr_info("session ended");
+    
+    pr_info("CAWR: session ended");
 }
 
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
@@ -234,57 +256,57 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
         return -EINVAL;
     }
     
-    spin_lock(&wrapper_list_lock);
+    spin_lock(&inner_cas_list_lock);
     
     // copy to the new structure
     struct tcp_congestion_ops* ca_copy = kmalloc(sizeof(*ca_copy), GFP_KERNEL);
     *ca_copy = *ca;
 
     // FIXME: check if was already registered
-    list_add_tail_rcu(&ca_copy->list, &wrapper_list);
+    list_add_tail_rcu(&ca_copy->list, &inner_cas_list);
     pr_info("add to the list: %s", ca_copy->name);
 
-    spin_unlock(&wrapper_list_lock);
+    spin_unlock(&inner_cas_list_lock);
 
     if (strcmp(ca->name, "tcp_ca_wrapper") != 0) {
-        spin_lock(&wrapper_ops_list_lock);
+        spin_lock(&wrappers_list_lock);
 
         // create correct wrapper ops
 
         struct ops_wrapper* ops_wrapper = kmalloc(sizeof(*ops_wrapper), GFP_KERNEL);
-        struct tcp_congestion_ops* wrap_ops = kmalloc(sizeof(*wrap_ops), GFP_KERNEL);
+        struct tcp_congestion_ops* wrapper = kmalloc(sizeof(*wrapper), GFP_KERNEL);
         
         memset(ops_wrapper, 0, sizeof(*ops_wrapper));
-        memset(wrap_ops, 0, sizeof(*wrap_ops));
+        memset(wrapper, 0, sizeof(*wrapper));
 
         // required
-        wrap_ops->release = tcp_ca_wrapper_release;  
-        wrap_ops->cong_avoid = tcp_ca_wrapper_cong_avoid;
-        wrap_ops->ssthresh = tcp_ca_wrapper_ssthresh;
-        wrap_ops->in_ack_event = tcp_ca_wrapper_in_ack_event;
-        wrap_ops->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
-        wrap_ops->owner = THIS_MODULE;
-        wrap_ops->key = ca->key;
-        wrap_ops->flags = ca->flags;
-        strncpy(wrap_ops->name, "wr_", 4);
-        strncpy(wrap_ops->name + 3, ca->name, strlen(ca->name) + 1);
+        wrapper->release = tcp_ca_wrapper_release;  
+        wrapper->cong_avoid = tcp_ca_wrapper_cong_avoid;
+        wrapper->ssthresh = tcp_ca_wrapper_ssthresh;
+        wrapper->in_ack_event = tcp_ca_wrapper_in_ack_event;
+        wrapper->undo_cwnd = tcp_ca_wrapper_undo_cwnd;
+        wrapper->owner = THIS_MODULE;
+        wrapper->key = ca->key;
+        wrapper->flags = ca->flags;
+        strncpy(wrapper->name, "wr_", 4);
+        strncpy(wrapper->name + 3, ca->name, strlen(ca->name) + 1);
         
         // optional
-        if (ca->init) wrap_ops->init = tcp_ca_wrapper_init;
-        if (ca->set_state) wrap_ops->set_state = tcp_ca_wrapper_set_state;
-        if (ca->cwnd_event) wrap_ops->cwnd_event = tcp_ca_wrapper_cwnd_event;
-        if (ca->pkts_acked) wrap_ops->pkts_acked = tcp_ca_wrapper_pkts_acked;
-        if (ca->tso_segs_goal) wrap_ops->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;
-        if (ca->get_info) wrap_ops->get_info = tcp_ca_wrapper_get_info;
-        if (ca->sndbuf_expand) wrap_ops->sndbuf_expand = tcp_ca_wrapper_sndbuf_expand;
-        if (ca->cong_control) wrap_ops->cong_control = tcp_ca_wrapper_cong_control;
+        if (ca->init) wrapper->init = tcp_ca_wrapper_init;
+        if (ca->set_state) wrapper->set_state = tcp_ca_wrapper_set_state;
+        if (ca->cwnd_event) wrapper->cwnd_event = tcp_ca_wrapper_cwnd_event;
+        if (ca->pkts_acked) wrapper->pkts_acked = tcp_ca_wrapper_pkts_acked;
+        if (ca->tso_segs_goal) wrapper->tso_segs_goal = tcp_ca_wrapper_tso_segs_goal;
+        if (ca->get_info) wrapper->get_info = tcp_ca_wrapper_get_info;
+        if (ca->sndbuf_expand) wrapper->sndbuf_expand = tcp_ca_wrapper_sndbuf_expand;
+        if (ca->cong_control) wrapper->cong_control = tcp_ca_wrapper_cong_control;
 
-        ops_wrapper->ops = wrap_ops;
+        ops_wrapper->ops = wrapper;
 
-        list_add_tail_rcu(&ops_wrapper->list, &wrapper_ops_list);
-        pr_info("add to the ops list: %s", wrap_ops->name);
+        list_add_tail_rcu(&ops_wrapper->list, &wrappers_list);
+        pr_info("add to the ops list: %s", wrapper->name);
 
-        spin_unlock(&wrapper_ops_list_lock);
+        spin_unlock(&wrappers_list_lock);
     }
     
     pr_info("register congestion control %s\n", ca->name);
@@ -296,14 +318,14 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 
 void jtcp_unregister_congestion_control(struct tcp_congestion_ops *ca)
 {
-    spin_lock(&wrapper_list_lock);
+    spin_lock(&inner_cas_list_lock);
     
     pr_info("del from the list: %s", ca->name);
-	spin_unlock(&wrapper_list_lock);
+	spin_unlock(&inner_cas_list_lock);
 
-    spin_lock(&wrapper_ops_list_lock);
+    spin_lock(&wrappers_list_lock);
 
-    spin_unlock(&wrapper_ops_list_lock);
+    spin_unlock(&wrappers_list_lock);
 
     pr_info("unregister congestion control %s\n", ca->name);
 
