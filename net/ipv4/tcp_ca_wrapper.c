@@ -124,7 +124,7 @@ static void tcp_ca_wrapper_init(struct sock *sk)
         struct tcp_congestion_ops *e;
         list_for_each_entry_rcu(e, &inner_cas_list, list) {
             if (strcmp(e->name, inner_ca_name) == 0) {
-                pr_info("CAWR: use inner \"%s\"", wrapper_name);
+                pr_info("CAWR: use inner \"%s\"", inner_ca_name);
                 sock_data->ops = e;
                 inner_ca_found = true;
             }
