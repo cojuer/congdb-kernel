@@ -71,7 +71,7 @@ static struct tcp_congestion_ops wr_reno = {
 
 struct sock_ca_data* get_priv_ca_data(struct sock *sk)
 {
-    return &((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
+    return ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID];
 }
 
 struct sock_ca_stats* get_priv_ca_stats(struct sock *sk)
@@ -90,10 +90,11 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     const char *inner_ca_name = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
 
     struct inet_connection_sock *icsk = inet_csk(sk);
+    memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
     // allocate memory for socket data
+    ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(struct sock_ca_data), GFP_KERNEL);
     struct sock_ca_data *sock_data = get_priv_ca_data(sk);
-    ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(*sock_data), GFP_KERNEL);
-    
+
     // set all statiscits to zeroes
     struct sock_ca_stats *stats = get_priv_ca_stats(sk);
     memset(stats, 0, sizeof(*stats));
@@ -116,7 +117,7 @@ static void tcp_ca_wrapper_init(struct sock *sk)
             wrapper_found = true;
         }
     }
-    kfree(ca_wr_name);
+    kfree(wrapper_name);
 
     // look for inner ca
     if (wrapper_found) {
