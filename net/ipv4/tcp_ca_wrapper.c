@@ -76,12 +76,24 @@ struct sock_ca_data* get_priv_ca_data(struct sock *sk)
 
 struct sock_ca_stats* get_priv_ca_stats(struct sock *sk)
 {
-    return &((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID]->stats;
+    struct sock_ca_data *data = get_priv_ca_data(sk);
+    if (!data) 
+    {
+        pr_err("CAWR: data is NULL");
+        return NULL;
+    }
+    return &data->stats;
 }
 
 struct tcp_congestion_ops* get_priv_ca_ops(struct sock *sk)
 {
-    return ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID]->ops;
+    struct sock_ca_data *data = get_priv_ca_data(sk);
+    if (!data) 
+    {
+        pr_err("CAWR: data is NULL");
+        return NULL;
+    }
+    return data->ops;
 }
 
 static void tcp_ca_wrapper_init(struct sock *sk)
@@ -89,8 +101,6 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     pr_info("CAWR: init tcp_ca_wrapper");
     const char *inner_ca_name = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
 
-    struct inet_connection_sock *icsk = inet_csk(sk);
-    memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
     // allocate memory for socket data
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(struct sock_ca_data), GFP_KERNEL);
     struct sock_ca_data *sock_data = get_priv_ca_data(sk);
@@ -154,10 +164,14 @@ static void tcp_ca_wrapper_release(struct sock *sk)
         return;
     }
 
-    pr_info("CAWR: release private sock data");
+    // write smoothed rtt into stats
+    u32 rtt = ((struct tcp_sock*)sk)->srtt_us >> 3;
+    get_priv_ca_stats(sk)->rtt = rtt;
 
     // aggregate statistics
     congdb_aggregate_stats(sk->sk_rcv_saddr, sk->sk_daddr, get_priv_ca_stats(sk));
+
+    pr_info("CAWR: release private sock data");
 
     // release inner congestion algorithm
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
@@ -172,16 +186,33 @@ static void tcp_ca_wrapper_release(struct sock *sk)
 
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 {
-    if (get_priv_ca_ops(sk)->ssthresh)
-        return get_priv_ca_ops(sk)->ssthresh(sk);
-    else return tcp_reno_ssthresh(sk);
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+    if (stats) 
+        stats->loss_num += 1;
+
+    struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
+    if (ops) 
+    {
+        return ops->ssthresh(sk);
+    }
+    else 
+    {
+        pr_err("CAWR: ops invalid");
+        return 0;
+    }
 }
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
-    if (get_priv_ca_ops(sk)->cong_avoid)
-        get_priv_ca_ops(sk)->cong_avoid(sk, ack, acked);
-    else tcp_reno_cong_avoid(sk, ack, acked);
+    struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
+    if (ops)
+    { 
+        ops->cong_avoid(sk, ack, acked);
+    }
+    else 
+    {
+        pr_err("CAWR: ops invalid");
+    }
 }
 
 void tcp_ca_wrapper_set_state(struct sock *sk, u8 new_state)
@@ -196,20 +227,27 @@ void tcp_ca_wrapper_cwnd_event(struct sock *sk, enum tcp_ca_event ev)
 
 void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags)
 {
-    get_priv_ca_stats(sk)->acks_num += 1;
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+    if (stats) 
+        stats->acks_num += 1;
 
     struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
-    if (ops->in_ack_event)
+    if (ops && ops->in_ack_event)
         ops->in_ack_event(sk, flags);
 }
 
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk)
 {
-    get_priv_ca_stats(sk)->loss_num += 1;
-    
-    if (get_priv_ca_ops(sk)->undo_cwnd)
-        return get_priv_ca_ops(sk)->undo_cwnd(sk);
-    else return tcp_reno_undo_cwnd(sk);
+    struct tcp_congestion_ops *ops = get_priv_ca_ops(sk);
+    if (ops)
+    {
+        return ops->undo_cwnd(sk);
+    }
+    else 
+    {
+        pr_err("CAWR: ops invalid");
+        return 0;
+    }
 }
 
 void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
