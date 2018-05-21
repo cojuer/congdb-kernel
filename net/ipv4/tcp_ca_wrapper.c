@@ -61,12 +61,13 @@ void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags);
 
 static struct tcp_cong_wr_ops wr_reno __read_mostly = {
     .ops = {
-        .release       = tcp_ca_wrapper_release,
+        .release           = tcp_ca_wrapper_release,
         .ssthresh	   = tcp_ca_wrapper_ssthresh,
         .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
         .undo_cwnd	   = tcp_ca_wrapper_undo_cwnd,
+        .in_ack_event      = tcp_ca_wrapper_in_ack_event,
 
-        .flags         = TCP_CONG_NON_RESTRICTED,
+        .flags             = TCP_CONG_NON_RESTRICTED,
         .owner		   = THIS_MODULE,
         .name		   = "wr_reno",
     },
@@ -154,8 +155,19 @@ static void tcp_ca_wrapper_release(struct sock *sk)
     }
 
     // write smoothed rtt into stats
-    u32 rtt = ((struct tcp_sock*)sk)->srtt_us >> 3;
+    u32 rtt = tcp_sk(sk)->srtt_us >> 3;
     get_priv_ca_stats(sk)->rtt = rtt;
+
+    u32 retr_num = tcp_sk(sk)->total_retrans;
+    get_priv_ca_stats(sk)->loss_num = retr_num;
+
+    pr_info("rtt: %u", rtt);
+    pr_info("ack: %u", get_priv_ca_stats(sk)->acks_num);
+    pr_info("retr: %u", retr_num);
+    pr_info("retr_out: %u", tcp_sk(sk)->retrans_out);
+    pr_info("icsk_retr: %u", (u32)inet_csk(sk)->icsk_retransmits);
+    pr_info("segs_out: %u", tcp_sk(sk)->segs_out);
+    pr_info("data_segs_out: %u", tcp_sk(sk)->data_segs_out);
 
     // aggregate statistics
     congdb_aggregate_stats(sk->sk_rcv_saddr, sk->sk_daddr, get_priv_ca_stats(sk));
@@ -203,7 +215,6 @@ void tcp_ca_wrapper_in_ack_event(struct sock *sk, u32 flags)
     if (stats) 
         stats->acks_num += 1;
 
-
     struct tcp_congestion_ops *ops = get_inner_ops(sk);
     if (ops && ops->in_ack_event)
         ops->in_ack_event(sk, flags);
@@ -243,7 +254,7 @@ size_t tcp_ca_wrapper_get_info(struct sock *sk, u32 ext, int *attr,
 static struct tcp_cong_wr_ops tcp_ca_wrapper __read_mostly = {
     .ops = {
         .init		   = tcp_ca_wrapper_init,
-        .release       = tcp_ca_wrapper_release,
+        .release           = tcp_ca_wrapper_release,
         .ssthresh	   = tcp_ca_wrapper_ssthresh,
         .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
         .undo_cwnd	   = tcp_ca_wrapper_undo_cwnd,
@@ -257,7 +268,7 @@ static struct tcp_cong_wr_ops tcp_ca_wrapper __read_mostly = {
 int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
 {
     if (!ca->ssthresh || !ca->undo_cwnd ||
-	    !(ca->cong_avoid || ca->cong_control)) {
+	!(ca->cong_avoid || ca->cong_control)) {
         jprobe_return();
         return -EINVAL;
     }
