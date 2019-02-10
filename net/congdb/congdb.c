@@ -20,6 +20,9 @@ bool match_ipv4(uint32_t ip_to_test, uint32_t ip, uint32_t mask)
     return ((ip_to_test & mask) == (ip & mask));
 }
 
+/**
+ * Find entry by given identifier
+ */
 static struct congdb_entry* __find_entry(struct rule_id *id)
 {
     struct congdb_entry *entry;
@@ -31,6 +34,9 @@ static struct congdb_entry* __find_entry(struct rule_id *id)
     return NULL;
 }
 
+/**
+ * Add new entry
+ */
 int congdb_add_entry(struct rule_id *id, char* ca)
 {
     int status = -1;
@@ -58,6 +64,38 @@ int congdb_add_entry(struct rule_id *id, char* ca)
     return status;
 }
 
+/**
+ * Set CA name for entry with given identifier
+ * Also reset all statistics.
+ */
+int congdb_set_entry(struct rule_id *id, char* ca)
+{
+    int status = -1;
+    struct congdb_entry *entry;
+    spin_lock(&data_lock);
+
+    entry = __find_entry(id); 
+    if (!entry) {
+        pr_err("CONGDB: no entry with such identifier\n");
+    } else {
+        char* ca_mem = kmalloc(strlen(ca) + 1, GFP_ATOMIC);
+        if (ca_mem) {
+            kfree(entry->ca_name);
+            entry->ca_name = strcpy(ca_mem, ca);
+            memset(&entry->stats, 0, sizeof(entry->stats));
+            status = 0;
+        } else {
+            pr_err("CONGDB: cannot allocate memory for new entry\n");
+            kfree(ca_mem);
+        }
+    }
+    spin_unlock(&data_lock);
+    return status;
+}
+
+/**
+ * Delete given entry
+ */
 void __del_entry(struct congdb_entry *entry)
 {
     list_del(&entry->lnode);
@@ -65,6 +103,9 @@ void __del_entry(struct congdb_entry *entry)
     kfree(entry);
 }
 
+/**
+ * Delete entry with given identifier
+ */
 int congdb_del_entry(struct rule_id *id)
 {
     int status = -1;
@@ -173,6 +214,7 @@ struct congdb_data* congdb_data_alloc(size_t size)
     return data;
 }
 
+// FIXME: probably not deleting ca names
 void congdb_data_free(struct congdb_data *data)
 {
     kfree(data);
@@ -206,6 +248,31 @@ struct congdb_data* congdb_list_entries()
     }
     spin_unlock(&data_lock);
     return data;
+}
+
+struct congdb_entry* congdb_get_entry_nl(struct rule_id *id)
+{
+    struct congdb_entry *entry;
+    struct congdb_entry *entry_copy;
+
+    spin_lock(&data_lock);
+
+    entry = __find_entry(id);
+    entry_copy = kmalloc(sizeof(struct congdb_entry_data), GFP_ATOMIC);
+    char *name = kmalloc(strlen(entry->ca_name) + 1, GFP_ATOMIC);
+    if (entry_copy && name) {
+        entry_copy.ca_name = strcpy(name, entry->ca_name);
+        entry_copy.id = entry->id;
+        entry_copy.stats = entry->stats;
+    } else {
+        pr_err("CADB: could not allocate memory for entry\n");
+        kfree(name);
+        kfree(entry_copy);
+        entry_copy = NULL;
+    }
+
+    spin_unlock(&data_lock);
+    return entry_copy;
 }
 
 EXPORT_SYMBOL(congdb_get_entry);

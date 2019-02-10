@@ -12,6 +12,10 @@ enum congdb_nl_cmds {
 
     CONGDB_C_ADD_ENTRY,
     CONGDB_C_DEL_ENTRY,
+
+    CONGDB_C_GET_ENTRY,
+    CONGDB_C_SET_ENTRY,
+
     CONGDB_C_CLEAR_ENTRIES,
 
     CONGDB_C_LIST_ENTRIES,
@@ -135,6 +139,58 @@ static int reply_congdb_data(struct genl_info *query_info,
     return 0;
 }
 
+static int nla_put_entry(struct sk_buff *skb, struct congdb_entry *entry)
+{
+    if (nla_put_u32(skb, CONGDB_A_LOC_IP, entry->id.loc_ip))
+        return -EFBIG;
+    if (nla_put_u32(skb, CONGDB_A_LOC_MASK, entry->id.loc_mask))
+        return -EFBIG;
+    if (nla_put_u32(skb, CONGDB_A_REM_IP, entry->id.rem_ip))
+        return -EFBIG;
+    if (nla_put_u32(skb, CONGDB_A_REM_MASK, entry->id.rem_mask))
+        return -EFBIG;
+    if (nla_put_u8(skb, CONGDB_A_PRIORITY, entry->id.priority))
+        return -EFBIG;
+    if (nla_put_string(skb, CONGDB_A_CA, entry->ca_name))
+        return -EFBIG;
+    if (nla_put_u32(skb, CONGDB_A_ACKS_NUM, entry->stats.acks_num))
+        return -EFBIG;
+    if (nla_put_u32(skb, CONGDB_A_LOSS_NUM, entry->stats.loss_num))
+        return -EFBIG;
+    if (nla_put_u32(skb, CONGDB_A_RTT, entry->stats.rtt))
+        return -EFBIG;
+    return 0;
+}
+
+static int reply_entry(struct genl_info *query_info,
+                       struct congdb_entry *entry)
+{
+    struct sk_buff *reply;
+    void *genl_hdr;
+
+    reply = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
+    if (!reply) {
+        pr_warn("CONGDB: cannot allocate memory for reply\n");
+        return -ENOMEM;
+    }
+
+    genl_hdr = genlmsg_put_reply(reply, query_info, &congdb_genl_fam,
+                                 0, CONGDB_C_GET_ENTRY);
+    if (!genl_hdr || nla_put_entry(reply, entry)) {
+        pr_warn("CONGDB: failed to compose reply\n");
+        kfree(reply);
+        return -EFBIG;
+    }
+
+    genlmsg_end(reply, genl_hdr);
+    if (genlmsg_reply(reply, query_info)) {
+        pr_warn("CONGDB: failed to send reply\n");
+        kfree(reply);
+        return -EIO;
+    }
+    return 0;
+}
+
 static int extract_tcp_data(struct nlattr **attrs, struct rule_id *id)
 {
     uint32_t loc_ip, loc_mask;
@@ -201,6 +257,20 @@ static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
                 }
                 return congdb_add_entry(&id, name);
             }
+        case CONGDB_C_SET_ENTRY:
+            {
+                char* name;
+                name = nla_get_id(attrs[CONGDB_A_CA]);
+                if (!name) {
+                    pr_warn("CONGDB: invalid congestion algorithm name\n");
+                    return -EINVAL;
+                }
+                struct rule_id id;
+                if (extract_tcp_data(attrs, &id)) {
+                    return -1;
+                }
+                return congdb_set_entry(&id, name);
+            }
         case CONGDB_C_DEL_ENTRY:
             {
                 struct rule_id id;
@@ -213,6 +283,20 @@ static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
             {
                 congdb_clear_entries();
                 return 0;
+            }
+        case CONGDB_C_GET_ENTRY:
+            {
+                struct congdb_entry *data;
+                int result;
+                data = congdb_get_entry_nl();
+                if (!data) {
+                    pr_err("CADB: failed to get congdb entry\n");
+                    return -EFBIG;
+                }
+                result = reply_entry(info, data);
+                kfree(data->ca_name);
+                kfree(data);
+                return result;
             }
         case CONGDB_C_LIST_ENTRIES:
             {
@@ -254,6 +338,11 @@ static const struct genl_ops congdb_manager_ops[] = {
         .doit = cmd_op_on_database,
     },
     {
+        .cmd = CONGDB_C_SET_ENTRY,
+        .policy = congdb_genl_policy,
+        .doit = cmd_op_on_database,
+    },
+    {
         .cmd = CONGDB_C_DEL_ENTRY,
         .policy = congdb_genl_policy,
         .doit = cmd_op_on_database,
@@ -263,6 +352,11 @@ static const struct genl_ops congdb_manager_ops[] = {
         .policy = congdb_genl_policy,
         .doit = cmd_op_on_database,
     },
+    {
+        .cmd = CONGDB_C_GET_ENTRY,
+        .policy = congdb_genl_policy,
+        .doit = cmd_op_on_database,
+    }
     {
         .cmd = CONGDB_C_LIST_ENTRIES,
         .policy = congdb_genl_policy,
