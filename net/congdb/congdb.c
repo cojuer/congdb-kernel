@@ -250,10 +250,10 @@ struct congdb_data* congdb_list_entries()
     return data;
 }
 
-struct congdb_entry* congdb_get_entry_nl(struct rule_id *id)
+struct congdb_entry_data* congdb_get_entry_nl(struct rule_id *id)
 {
     struct congdb_entry *entry;
-    struct congdb_entry *entry_copy;
+    struct congdb_entry_data *entry_copy;
 
     spin_lock(&data_lock);
 
@@ -261,9 +261,9 @@ struct congdb_entry* congdb_get_entry_nl(struct rule_id *id)
     entry_copy = kmalloc(sizeof(struct congdb_entry_data), GFP_ATOMIC);
     char *name = kmalloc(strlen(entry->ca_name) + 1, GFP_ATOMIC);
     if (entry_copy && name) {
-        entry_copy.ca_name = strcpy(name, entry->ca_name);
-        entry_copy.id = entry->id;
-        entry_copy.stats = entry->stats;
+        entry_copy->ca_name = strcpy(name, entry->ca_name);
+        entry_copy->id = entry->id;
+        entry_copy->stats = entry->stats;
     } else {
         pr_err("CADB: could not allocate memory for entry\n");
         kfree(name);

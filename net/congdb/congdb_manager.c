@@ -139,7 +139,7 @@ static int reply_congdb_data(struct genl_info *query_info,
     return 0;
 }
 
-static int nla_put_entry(struct sk_buff *skb, struct congdb_entry *entry)
+static int nla_put_entry(struct sk_buff *skb, struct congdb_entry_data *entry)
 {
     if (nla_put_u32(skb, CONGDB_A_LOC_IP, entry->id.loc_ip))
         return -EFBIG;
@@ -163,7 +163,7 @@ static int nla_put_entry(struct sk_buff *skb, struct congdb_entry *entry)
 }
 
 static int reply_entry(struct genl_info *query_info,
-                       struct congdb_entry *entry)
+                       struct congdb_entry_data *entry)
 {
     struct sk_buff *reply;
     void *genl_hdr;
@@ -286,9 +286,13 @@ static int cmd_op_on_database(struct sk_buff *skb, struct genl_info *info)
             }
         case CONGDB_C_GET_ENTRY:
             {
-                struct congdb_entry *data;
+                struct rule_id id;
+                if (extract_tcp_data(attrs, &id)) {
+                    return -1;
+                }
+                struct congdb_entry_data *data;
                 int result;
-                data = congdb_get_entry_nl();
+                data = congdb_get_entry_nl(&id);
                 if (!data) {
                     pr_err("CADB: failed to get congdb entry\n");
                     return -EFBIG;
@@ -356,7 +360,7 @@ static const struct genl_ops congdb_manager_ops[] = {
         .cmd = CONGDB_C_GET_ENTRY,
         .policy = congdb_genl_policy,
         .doit = cmd_op_on_database,
-    }
+    },
     {
         .cmd = CONGDB_C_LIST_ENTRIES,
         .policy = congdb_genl_policy,

@@ -4,7 +4,6 @@
 #include <linux/inet_diag.h>
 
 #include <net/tcp.h>
-#include <net/congdb/tcp_ca_wrapper.h>
 #include <net/congdb/congdb_manager.h>
 
 #include <linux/kprobes.h>

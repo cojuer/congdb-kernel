@@ -34,9 +34,9 @@ void congdb_data_free(struct congdb_data *confs);
 
 // operations on database
 int congdb_add_entry(struct rule_id *id, char* ca);
-int congdb_set_entry(struct rule_id *id, char* ca)
+int congdb_set_entry(struct rule_id *id, char* ca);
 int congdb_del_entry(struct rule_id *id);
-struct congdb_entry* congdb_get_entry_nl(struct rule_id *id);
+struct congdb_entry_data* congdb_get_entry_nl(struct rule_id *id);
 void congdb_clear_entries(void);
 struct congdb_data* congdb_list_entries(void);
 
