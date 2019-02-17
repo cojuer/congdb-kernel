@@ -41,6 +41,7 @@ void congdb_clear_entries(void);
 struct congdb_data* congdb_list_entries(void);
 
 //TEST
+void cadb_set_socket(struct sock *sk);
 const char* congdb_get_entry(uint32_t loc_ip, uint32_t rem_ip);
 void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats);
 

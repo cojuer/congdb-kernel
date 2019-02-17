@@ -129,6 +129,7 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 
     // set reno if wrapper or inner ca not found
     if (wrapper != NULL) {
+        cadb_set_socket(sk);
         pr_info("CAWR: wrapper found: \"%s\"", wrapper->ops.name);
         inet_csk(sk)->icsk_ca_ops = (struct tcp_congestion_ops*)wrapper;
     }
@@ -146,6 +147,7 @@ static void tcp_ca_wrapper_init(struct sock *sk)
 extern void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats);
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
+    cadb_set_socket(NULL);
     struct sock_ca_data *sock_data = get_priv_ca_data(sk);
     if (sock_data == NULL)
     {

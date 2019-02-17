@@ -1,4 +1,5 @@
 #include <net/congdb/congdb_manager.h>
+#include <net/tcp.h>
 
 #include <linux/hashtable.h>
 #include <linux/spinlock.h>
@@ -33,6 +34,32 @@ static struct congdb_entry* __find_entry(struct rule_id *id)
     }
     return NULL;
 }
+
+static struct sock *slave_sk = NULL;
+/**
+ * Set socket to control it
+ */
+void cadb_set_socket(struct sock *sk)
+{
+    if (slave_sk && !sk) {
+        struct rule_id id = {
+            .loc_ip = slave_sk->sk_rcv_saddr,
+            .loc_mask = UINT_MAX,
+            .rem_ip = slave_sk->sk_daddr,
+            .rem_mask = UINT_MAX,
+            .priority = 0
+        };
+        struct congdb_entry *entry = __find_entry(&id);
+        if (entry) {
+            slave_sk = NULL;
+            pr_info("release socket");
+        }
+    } else {
+        slave_sk = sk;
+        pr_info("attach socket");
+    }
+}
+EXPORT_SYMBOL_GPL(cadb_set_socket);
 
 /**
  * Add new entry
@@ -70,6 +97,7 @@ int congdb_add_entry(struct rule_id *id, char* ca)
  */
 int congdb_set_entry(struct rule_id *id, char* ca)
 {
+    pr_info("CADB: set entry\n");
     int status = -1;
     struct congdb_entry *entry;
     spin_lock(&data_lock);
@@ -90,6 +118,11 @@ int congdb_set_entry(struct rule_id *id, char* ca)
         }
     }
     spin_unlock(&data_lock);
+    // TEST
+    if (slave_sk) {
+        pr_info("CADB: call set congestion control\n");
+        tcp_set_congestion_control(slave_sk, "tcp_ca_wrapper");
+    }
     return status;
 }
 
