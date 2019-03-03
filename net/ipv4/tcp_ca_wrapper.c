@@ -8,14 +8,32 @@
 
 #include <linux/kprobes.h>
 
+#define BW_SCALE 24
+#define BW_UNIT (1 << BW_SCALE)
+
+#define BBR_SCALE 8	/* scaling factor for fractions in BBR (e.g. gains) */
+#define BBR_UNIT (1 << BBR_SCALE)
+
 static DEFINE_SPINLOCK(wrappers_list_lock);
 static LIST_HEAD(wrappers_list);
+
+static const int bbr_bw_rtts = 2;
 
 struct sock_ca_stats
 {
     uint32_t acks_num;
     uint32_t loss_num;
     uint32_t rtt;
+
+    // New test estimates
+    uint32_t beg_snd_nxt;
+    uint32_t acks_num_new;
+    uint32_t minRTT;
+
+    // BBR bw estimates
+    uint32_t next_rtt_delivered;
+    uint32_t rtt_cnt;
+    struct minmax bw;
 };
 
 struct sock_ca_data
@@ -144,6 +162,63 @@ static void tcp_ca_wrapper_init(struct sock *sk)
         ops->init(sk);
 }
 
+static u32 max_bw(const struct sock *sk)
+{
+	struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+	return minmax_get(&stats->bw);
+}
+
+static u32 bw(const struct sock *sk)
+{
+	return max_bw(sk);
+}
+
+static u64 rate_bytes_per_sec(struct sock *sk, u64 rate, int gain)
+{
+	rate *= tcp_mss_to_mtu(sk, tcp_sk(sk)->mss_cache);
+	rate *= gain;
+	rate >>= BBR_SCALE;
+	rate *= USEC_PER_SEC;
+	return rate >> BW_SCALE;
+}
+
+static void update_bw(struct sock *sk, const struct rate_sample *rs)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+	u64 bw;
+
+	if (rs->delivered < 0 || rs->interval_us <= 0)
+		return; /* Not a valid observation */
+
+    if (!before(rs->prior_delivered, stats->next_rtt_delivered)) {
+		stats->next_rtt_delivered = tp->delivered;
+		stats->rtt_cnt++;
+	}
+
+	bw = (u64)rs->delivered * BW_UNIT;
+	do_div(bw, rs->interval_us);
+    // pr_info("temp rate:  %llu", rate_bytes_per_sec(sk, bw, BBR_UNIT));
+
+	if (!rs->is_app_limited || bw >= max_bw(sk)) {
+        // pr_info("running max %u", stats->rtt_cnt);
+		minmax_running_max(&stats->bw, bbr_bw_rtts, stats->rtt_cnt, bw);
+	}
+
+    if (get_priv_ca_stats(sk)->minRTT > 0
+        && rate_bytes_per_sec(sk, max_bw(sk), BBR_UNIT) > 0)
+        pr_info(
+            "notify! %pI4 %pI4 %u %u %u %llu",
+            &sk->sk_rcv_saddr,
+            &sk->sk_daddr,
+            get_priv_ca_stats(sk)->minRTT,
+            tp->lost,
+            tp->delivered,
+            rate_bytes_per_sec(sk, max_bw(sk), BBR_UNIT)
+        );
+}
+
+
 extern void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats);
 static void tcp_ca_wrapper_release(struct sock *sk)
 {
@@ -162,13 +237,26 @@ static void tcp_ca_wrapper_release(struct sock *sk)
     u32 retr_num = tcp_sk(sk)->total_retrans;
     get_priv_ca_stats(sk)->loss_num = retr_num;
 
-    pr_info("rtt: %u", rtt);
-    pr_info("ack: %u", get_priv_ca_stats(sk)->acks_num);
-    pr_info("retr: %u", retr_num);
-    pr_info("retr_out: %u", tcp_sk(sk)->retrans_out);
+    pr_info("rtt:       %u", rtt);
+    pr_info("rtt new:   %u", get_priv_ca_stats(sk)->minRTT);
+    pr_info("ack:       %u", get_priv_ca_stats(sk)->acks_num);
+    pr_info("ack new:   %u", get_priv_ca_stats(sk)->acks_num_new);
+    pr_info("retr:      %u", retr_num);
+    pr_info("retr_out:  %u", tcp_sk(sk)->retrans_out);
     pr_info("icsk_retr: %u", (u32)inet_csk(sk)->icsk_retransmits);
-    pr_info("segs_out: %u", tcp_sk(sk)->segs_out);
+    pr_info("segs_out:  %u", tcp_sk(sk)->segs_out);
     pr_info("data_segs_out: %u", tcp_sk(sk)->data_segs_out);
+    pr_info("bbr_rate:  %llu", rate_bytes_per_sec(sk, bw(sk), BBR_UNIT));
+
+    // TEST notification
+    pr_info(
+        "notify! %pI4 %pI4 %u %u %u",
+        &sk->sk_rcv_saddr,
+        &sk->sk_daddr,
+        get_priv_ca_stats(sk)->minRTT,
+        get_priv_ca_stats(sk)->loss_num,
+        get_priv_ca_stats(sk)->acks_num_new
+    );
 
     // aggregate statistics
     congdb_aggregate_stats(sk->sk_rcv_saddr, sk->sk_daddr, get_priv_ca_stats(sk));
@@ -197,6 +285,10 @@ u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+    if (stats) 
+        stats->acks_num_new += acked;
+
     get_inner_ops(sk)->cong_avoid(sk, ack, acked);
 }
 
@@ -228,6 +320,15 @@ u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk)
 
 void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 {
+    uint32_t vrtt;
+
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+    if (stats && sample->rtt_us >= 0) {
+        if (stats->minRTT == 0) stats->minRTT = 0x7fffffff;
+        vrtt = sample->rtt_us + 1;
+        stats->minRTT = min(stats->minRTT, vrtt);
+    }
+
     get_inner_ops(sk)->pkts_acked(sk, sample);
 }
 
@@ -243,7 +344,12 @@ u32 tcp_ca_wrapper_sndbuf_expand(struct sock *sk)
 
 void tcp_ca_wrapper_cong_control(struct sock *sk, const struct rate_sample *rs)
 {
-    get_inner_ops(sk)->cong_control(sk, rs);
+    return get_inner_ops(sk)->cong_control(sk, rs);
+}
+
+void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs)
+{
+    update_bw(sk, rs);
 }
 
 size_t tcp_ca_wrapper_get_info(struct sock *sk, u32 ext, int *attr,
@@ -255,7 +361,7 @@ size_t tcp_ca_wrapper_get_info(struct sock *sk, u32 ext, int *attr,
 static struct tcp_cong_wr_ops tcp_ca_wrapper __read_mostly = {
     .ops = {
         .init		   = tcp_ca_wrapper_init,
-        .release           = tcp_ca_wrapper_release,
+        .release       = tcp_ca_wrapper_release,
         .ssthresh	   = tcp_ca_wrapper_ssthresh,
         .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
         .undo_cwnd	   = tcp_ca_wrapper_undo_cwnd,
@@ -292,7 +398,9 @@ int jtcp_register_congestion_control(struct tcp_congestion_ops *ca)
         wrapper->ops.flags = ca->flags;
         strncpy(wrapper->ops.name, "wr_", 4);
         strncpy(wrapper->ops.name + 3, ca->name, strlen(ca->name) + 1);
-        
+
+        wrapper->ops.use_sample = tcp_ca_wrapper_use_sample;
+
         // Set optional members
         if (ca->init)           wrapper->ops.init = tcp_ca_wrapper_init;
         if (ca->set_state)      wrapper->ops.set_state = tcp_ca_wrapper_set_state;
