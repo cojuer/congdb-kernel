@@ -16,6 +16,7 @@ struct rule_stats {
     uint32_t acks_num;
     uint32_t loss_num;
     uint32_t rtt;
+    uint32_t bbr_rate;
 };
 
 struct congdb_entry_data {

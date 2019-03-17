@@ -41,6 +41,7 @@ enum congdb_nl_attrs {
     CONGDB_A_ACKS_NUM,
     CONGDB_A_LOSS_NUM,
     CONGDB_A_RTT,
+    CONGDB_A_BBR_RATE,
 
     // used to verify nl attributes
     __CONGDB_A_MAX,
@@ -106,6 +107,8 @@ static int nla_put_congdb_data(struct sk_buff *skb, struct congdb_data *data)
             return -EFBIG;
         if (nla_put_u32(skb, CONGDB_A_RTT, data->entries[i].stats.rtt))
             return -EFBIG;
+        if (nla_put_u64(skb, CONGDB_A_BBR_RATE, data->entries[i].stats.bbr_rate))
+            return -EFBIG;
     }
     return 0;
 }
@@ -158,6 +161,8 @@ static int nla_put_entry(struct sk_buff *skb, struct congdb_entry_data *entry)
     if (nla_put_u32(skb, CONGDB_A_LOSS_NUM, entry->stats.loss_num))
         return -EFBIG;
     if (nla_put_u32(skb, CONGDB_A_RTT, entry->stats.rtt))
+        return -EFBIG;
+    if (nla_put_u64(skb, CONGDB_A_BBR_RATE, entry->stats.bbr_rate))
         return -EFBIG;
     return 0;
 }
@@ -333,6 +338,7 @@ static struct nla_policy congdb_genl_policy[CONGDB_A_MAX + 1] = {
     [CONGDB_A_ACKS_NUM] = {.type = NLA_U32},
     [CONGDB_A_LOSS_NUM] = {.type = NLA_U32},
     [CONGDB_A_RTT] = {.type = NLA_U32},
+    [CONGDB_A_BBR_RATE] = {.type = NLA_U64},
 };
 
 static const struct genl_ops congdb_manager_ops[] = {

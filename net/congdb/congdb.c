@@ -205,18 +205,22 @@ void congdb_aggregate_stats(uint32_t loc_ip, uint32_t rem_ip, void *stats)
     if (!entry) {
         pr_err("CONGDB: no rule for socket statistics");
     } else {
+        if (stats_to_agg->acks_num <= 50)
+            pr_warn("CADB: not enough acknowledgments");
         if (entry->stats.acks_num == 0 &&
             entry->stats.loss_num == 0 &&
             entry->stats.rtt == 0) {
             entry->stats.acks_num = stats_to_agg->acks_num;
             entry->stats.loss_num = stats_to_agg->loss_num;
             entry->stats.rtt = stats_to_agg->rtt;
+            entry->stats.bbr_rate = stats_to_agg->bbr_rate;
         } else if (stats_to_agg->acks_num > 50) {
             entry->stats.acks_num = entry->stats.acks_num * 9 / 10 + stats_to_agg->acks_num / 10;
             entry->stats.loss_num = entry->stats.loss_num * 9 / 10 + stats_to_agg->loss_num / 10;
             entry->stats.rtt = entry->stats.rtt * 9 / 10 + stats_to_agg->rtt / 10;
+            entry->stats.bbr_rate = stats_to_agg->bbr_rate;
         }
-        pr_info("CONGDB: statistics aggregation succeded");
+        pr_info("CADB: finish statistics aggregation");
     }
     spin_unlock(&data_lock);
 }

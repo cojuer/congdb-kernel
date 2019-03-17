@@ -24,6 +24,7 @@ struct sock_ca_stats
     uint32_t acks_num;
     uint32_t loss_num;
     uint32_t rtt;
+    uint32_t bbr_rate;
 
     // New test estimates
     uint32_t beg_snd_nxt;
