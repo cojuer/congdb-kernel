@@ -107,7 +107,7 @@ static int nla_put_congdb_data(struct sk_buff *skb, struct congdb_data *data)
             return -EFBIG;
         if (nla_put_u32(skb, CONGDB_A_RTT, data->entries[i].stats.rtt))
             return -EFBIG;
-        if (nla_put_u64(skb, CONGDB_A_BBR_RATE, data->entries[i].stats.bbr_rate))
+        if (nla_put_u64_64bit(skb, CONGDB_A_BBR_RATE, data->entries[i].stats.bbr_rate, 0))
             return -EFBIG;
     }
     return 0;
@@ -162,7 +162,7 @@ static int nla_put_entry(struct sk_buff *skb, struct congdb_entry_data *entry)
         return -EFBIG;
     if (nla_put_u32(skb, CONGDB_A_RTT, entry->stats.rtt))
         return -EFBIG;
-    if (nla_put_u64(skb, CONGDB_A_BBR_RATE, entry->stats.bbr_rate))
+    if (nla_put_u64_64bit(skb, CONGDB_A_BBR_RATE, entry->stats.bbr_rate, 0))
         return -EFBIG;
     return 0;
 }

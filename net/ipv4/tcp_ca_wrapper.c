@@ -24,7 +24,7 @@ struct sock_ca_stats
     uint32_t acks_num;
     uint32_t loss_num;
     uint32_t rtt;
-    uint32_t bbr_rate;
+    uint64_t bbr_rate;
 
     // New test estimates
     uint32_t beg_snd_nxt;
@@ -199,10 +199,8 @@ static void update_bw(struct sock *sk, const struct rate_sample *rs)
 
 	bw = (u64)rs->delivered * BW_UNIT;
 	do_div(bw, rs->interval_us);
-    // pr_info("temp rate:  %llu", rate_bytes_per_sec(sk, bw, BBR_UNIT));
 
 	if (!rs->is_app_limited || bw >= max_bw(sk)) {
-        // pr_info("running max %u", stats->rtt_cnt);
 		minmax_running_max(&stats->bw, bbr_bw_rtts, stats->rtt_cnt, bw);
 	}
 
@@ -233,18 +231,24 @@ static void tcp_ca_wrapper_release(struct sock *sk)
 
     // write smoothed rtt into stats
     u32 rtt = tcp_sk(sk)->srtt_us >> 3;
-    get_priv_ca_stats(sk)->rtt = rtt;
-
     u32 retr_num = tcp_sk(sk)->total_retrans;
-    get_priv_ca_stats(sk)->loss_num = retr_num;
 
+    get_priv_ca_stats(sk)->rtt = rtt;
+    get_priv_ca_stats(sk)->loss_num = retr_num;
+    get_priv_ca_stats(sk)->bbr_rate = rate_bytes_per_sec(sk, bw(sk), BBR_UNIT);
+
+    pr_info("RTT");
     pr_info("rtt:       %u", rtt);
-    pr_info("rtt new:   %u", get_priv_ca_stats(sk)->minRTT);
-    pr_info("ack:       %u", get_priv_ca_stats(sk)->acks_num);
-    pr_info("ack new:   %u", get_priv_ca_stats(sk)->acks_num_new);
+    pr_info("rtt(min):  %u", get_priv_ca_stats(sk)->minRTT);
+    pr_info("Acked");
+    pr_info("ack(+1):      %u", get_priv_ca_stats(sk)->acks_num);
+    pr_info("ack(+acked):  %u", get_priv_ca_stats(sk)->acks_num_new);
+    pr_info("ack(tp):      %u", tcp_sk(sk)->delivered);
+    pr_info("Retransmits");
     pr_info("retr:      %u", retr_num);
-    pr_info("retr_out:  %u", tcp_sk(sk)->retrans_out);
-    pr_info("icsk_retr: %u", (u32)inet_csk(sk)->icsk_retransmits);
+    pr_info("retr(tp):  %u", tcp_sk(sk)->retrans_out);
+    pr_info("retr(icsk):%u", (u32)inet_csk(sk)->icsk_retransmits);
+    pr_info("Total segments out");
     pr_info("segs_out:  %u", tcp_sk(sk)->segs_out);
     pr_info("data_segs_out: %u", tcp_sk(sk)->data_segs_out);
     pr_info("bbr_rate:  %llu", rate_bytes_per_sec(sk, bw(sk), BBR_UNIT));
