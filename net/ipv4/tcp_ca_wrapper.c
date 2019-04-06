@@ -233,13 +233,13 @@ static void tcp_ca_wrapper_release(struct sock *sk)
     stats->acks_num = tcp_sk(sk)->delivered;
     stats->loss_num = tcp_sk(sk)->total_retrans;
     stats->bbr_rate = rate_bytes_per_sec(sk, bw(sk), BBR_UNIT);
-    uint32_t diff_us = (tcp_time_stamp - stats->time_us) * 1000 / HZ;
+    stats->time_us = (tcp_time_stamp - stats->time_us) * 1000 / HZ;
 
     pr_info("rtt:       %u", stats->rtt);
     pr_info("ack:       %u", stats->acks_num);
     pr_info("retr:      %u", stats->loss_num);
     pr_info("bbr_rate:  %llu", stats->bbr_rate);
-    pr_info("time_diff: %u", diff_us);
+    pr_info("time_diff: %u", stats->time_us);
     pr_info("mss:       %u", tcp_sk(sk)->mss_cache);
 
     // TEST notification
