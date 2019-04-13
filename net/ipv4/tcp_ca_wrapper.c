@@ -27,6 +27,9 @@ struct sock_ca_stats
     uint64_t bbr_rate;
     uint32_t time_us;
 
+    // iteration tracking
+    uint32_t beg_snd_nxt;
+
     // BBR bw estimates
     uint32_t next_rtt_delivered;
     uint32_t rtt_cnt;
@@ -72,6 +75,7 @@ u32 tcp_ca_wrapper_ssthresh(struct sock *sk);
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked);
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk);
 void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs);
+void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample);
 
 static struct tcp_cong_wr_ops wr_reno __read_mostly = {
     .ops = {
@@ -80,6 +84,7 @@ static struct tcp_cong_wr_ops wr_reno __read_mostly = {
         .cong_avoid	   = tcp_ca_wrapper_cong_avoid,
         .undo_cwnd     = tcp_ca_wrapper_undo_cwnd,
         .use_sample    = tcp_ca_wrapper_use_sample,
+        .pkts_acked    = tcp_ca_wrapper_pkts_acked,
 
         .flags         = TCP_CONG_NON_RESTRICTED,
         .owner		   = THIS_MODULE,
@@ -114,23 +119,20 @@ struct tcp_congestion_ops* get_inner_ops(struct sock *sk)
 
 static void tcp_ca_wrapper_init(struct sock *sk)
 {
-    pr_info("CAWR: init tcp_ca_wrapper");
+    pr_info("CA: initialize wrapper");
+    const struct tcp_sock *tp = tcp_sk(sk);
     const char *inner_ca_name = congdb_get_entry(sk->sk_rcv_saddr, sk->sk_daddr);
 
     // allocate memory for socket data
     ((struct sock_ca_data**)inet_csk_ca(sk))[PRIV_CA_ID] = kmalloc(sizeof(struct sock_ca_data), GFP_KERNEL);
 
-    // set all statistics to zeroes
+    // initialize state
     struct sock_ca_stats *stats = get_priv_ca_stats(sk);
     memset(stats, 0, sizeof(*stats));
     stats->time_us = tcp_time_stamp;
-    // struct timespec ts;
-    // getnstimeofday(&ts);
-    // stats->time_us = 
+    stats->beg_snd_nxt = tp->snd_nxt;
 
     // look for wrapper
-
-    // TODO: use static memory
     // allocate name to find wrapper 
     // example: reno -> wr_reno
     char *wrapper_name = kmalloc(4 + strlen(inner_ca_name), GFP_KERNEL);
@@ -149,16 +151,15 @@ static void tcp_ca_wrapper_init(struct sock *sk)
     // set reno if wrapper or inner ca not found
     if (wrapper != NULL) {
         cadb_set_socket(sk);
-        pr_info("CAWR: wrapper found: \"%s\"", wrapper->ops.name);
+        pr_info("CA: wrapper found: \"%s\"", wrapper->ops.name);
         inet_csk(sk)->icsk_ca_ops = (struct tcp_congestion_ops*)wrapper;
     }
     else {
-        pr_err("CAWR: wrapper not found: reno will be used");
+        pr_err("CA: wrapper not found: reno will be used");
         inet_csk(sk)->icsk_ca_ops = (struct tcp_congestion_ops*)(&wr_reno);
     }
 
     struct tcp_congestion_ops *ops = get_inner_ops(sk);
-    pr_info("CAWR: inner name \"%s\"", ops->name);
     if (ops->init)
         ops->init(sk);
 }
@@ -235,22 +236,15 @@ static void tcp_ca_wrapper_release(struct sock *sk)
     stats->bbr_rate = rate_bytes_per_sec(sk, bw(sk), BBR_UNIT);
     stats->time_us = (tcp_time_stamp - stats->time_us) * 1000 / HZ;
 
-    pr_info("rtt:       %u", stats->rtt);
-    pr_info("ack:       %u", stats->acks_num);
-    pr_info("retr:      %u", stats->loss_num);
-    pr_info("bbr_rate:  %llu", stats->bbr_rate);
-    pr_info("time_diff: %u", stats->time_us);
-    pr_info("mss:       %u", tcp_sk(sk)->mss_cache);
-
-    // TEST notification
-    // pr_info(
-    //     "notify! %pI4 %pI4 %u %u %u",
-    //     &sk->sk_rcv_saddr,
-    //     &sk->sk_daddr,
-    //     stats->rtt,
-    //     stats->loss_num,
-    //     stats->acks_num
-    // );
+    if (inet_sk(sk)->inet_num == 45000) {
+        pr_info("release experiment socket");
+        pr_info("rtt:       %u", stats->rtt);
+        pr_info("ack:       %u", stats->acks_num);
+        pr_info("retr:      %u", stats->loss_num);
+        pr_info("bbr_rate:  %llu", stats->bbr_rate);
+        pr_info("time_diff: %u", stats->time_us);
+        pr_info("mss:       %u", tcp_sk(sk)->mss_cache);
+    }
 
     // aggregate statistics
     congdb_aggregate_stats(sk->sk_rcv_saddr, sk->sk_daddr, get_priv_ca_stats(sk));
@@ -275,6 +269,24 @@ u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
+    const struct tcp_sock *tp = tcp_sk(sk);
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+    if (after(ack, stats->beg_snd_nxt)) {
+        stats->beg_snd_nxt = tp->snd_nxt;
+        if (inet_sk(sk)->inet_num == 45000) {
+            pr_info(
+                "collect: %pI4 %u %pI4 RTT %u RETR %u  DEL %u TIME %u",
+                &sk->sk_rcv_saddr,
+                inet_sk(sk)->inet_num,
+                &sk->sk_daddr,
+                stats->rtt,
+                tp->total_retrans,
+                tp->delivered,
+                // FIXME: probable overflow
+                tcp_time_stamp * 1000 / HZ
+            );
+        }
+    }
     get_inner_ops(sk)->cong_avoid(sk, ack, acked);
 }
 
