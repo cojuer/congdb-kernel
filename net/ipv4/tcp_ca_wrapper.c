@@ -26,6 +26,7 @@ struct sock_ca_stats
     uint32_t rtt;
     uint64_t bbr_rate;
     uint32_t time_us;
+    uint32_t rtt_max;
 
     // iteration tracking
     uint32_t beg_snd_nxt;
@@ -74,7 +75,7 @@ static void tcp_ca_wrapper_release(struct sock *sk);
 u32 tcp_ca_wrapper_ssthresh(struct sock *sk);
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked);
 u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk);
-void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs);
+void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs, u32 ack, u32 acked_sacked);
 void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample);
 
 static struct tcp_cong_wr_ops wr_reno __read_mostly = {
@@ -269,24 +270,6 @@ u32 tcp_ca_wrapper_ssthresh(struct sock *sk)
 
 void tcp_ca_wrapper_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
-    const struct tcp_sock *tp = tcp_sk(sk);
-    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
-    if (after(ack, stats->beg_snd_nxt)) {
-        stats->beg_snd_nxt = tp->snd_nxt;
-        if (inet_sk(sk)->inet_num == 45000) {
-            pr_info(
-                "collect: %pI4 %u %pI4 RTT %u RETR %u  DEL %u TIME %u",
-                &sk->sk_rcv_saddr,
-                inet_sk(sk)->inet_num,
-                &sk->sk_daddr,
-                stats->rtt,
-                tp->total_retrans,
-                tp->delivered,
-                // FIXME: probable overflow
-                tcp_time_stamp * 1000 / HZ
-            );
-        }
-    }
     get_inner_ops(sk)->cong_avoid(sk, ack, acked);
 }
 
@@ -319,6 +302,7 @@ void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
         if (stats->rtt == 0) stats->rtt = 0x7fffffff;
         vrtt = sample->rtt_us + 1;
         stats->rtt = min(stats->rtt, vrtt);
+        stats->rtt_max = max(stats->rtt_max, vrtt);
     }
 
     struct tcp_congestion_ops *ops = get_inner_ops(sk);
@@ -341,8 +325,25 @@ void tcp_ca_wrapper_cong_control(struct sock *sk, const struct rate_sample *rs)
     return get_inner_ops(sk)->cong_control(sk, rs);
 }
 
-void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs)
+void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs, u32 ack, u32 acked_sacked)
 {
+    const struct tcp_sock *tp = tcp_sk(sk);
+    struct sock_ca_stats* stats = get_priv_ca_stats(sk);
+    if (after(ack, stats->beg_snd_nxt)) {
+        stats->beg_snd_nxt = tp->snd_nxt;
+        if (inet_sk(sk)->inet_num == 45000) {
+            pr_info(
+                "collect: RTTMIN %u RTTMAX %u RTTMDEV %u RETR %u DLV %u TIME %u",
+                stats->rtt,
+                stats->rtt_max,
+                tp->mdev_us,
+                tp->total_retrans,
+                tp->delivered,
+                // FIXME: probable overflow
+                tcp_time_stamp * 1000 / HZ
+            );
+        }
+    }
     update_bw(sk, rs);
 }
 
