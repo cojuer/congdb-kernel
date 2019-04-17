@@ -1,66 +1,87 @@
 #
-# Makefile for the Linux TCP/IP (INET) layer.
+# Makefile for the linux networking.
+#
+# 2 Sep 2000, Christoph Hellwig <hch@infradead.org>
+# Rewritten to use lists instead of if-statements.
 #
 
-obj-y     := route.o inetpeer.o protocol.o \
-	     ip_input.o ip_fragment.o ip_forward.o ip_options.o \
-	     ip_output.o ip_sockglue.o inet_hashtables.o \
-	     inet_timewait_sock.o inet_connection_sock.o \
-	     tcp.o tcp_input.o tcp_output.o tcp_timer.o tcp_ipv4.o \
-	     tcp_minisocks.o tcp_cong.o tcp_metrics.o tcp_fastopen.o \
-	     tcp_rate.o tcp_recovery.o \
-	     tcp_offload.o datagram.o raw.o udp.o udplite.o \
-	     udp_offload.o arp.o icmp.o devinet.o af_inet.o igmp.o \
-	     fib_frontend.o fib_semantics.o fib_trie.o fib_notifier.o \
-	     inet_fragment.o ping.o ip_tunnel_core.o gre_offload.o
+obj-$(CONFIG_NET)		:= socket.o core/
 
-obj-$(CONFIG_NET_IP_TUNNEL) += ip_tunnel.o
-obj-$(CONFIG_SYSCTL) += sysctl_net_ipv4.o
-obj-$(CONFIG_PROC_FS) += proc.o
-obj-$(CONFIG_IP_MULTIPLE_TABLES) += fib_rules.o
-obj-$(CONFIG_IP_MROUTE) += ipmr.o
-obj-$(CONFIG_NET_IPIP) += ipip.o
-gre-y := gre_demux.o
-obj-$(CONFIG_NET_FOU) += fou.o
-obj-$(CONFIG_NET_IPGRE_DEMUX) += gre.o
-obj-$(CONFIG_NET_IPGRE) += ip_gre.o
-obj-$(CONFIG_NET_UDP_TUNNEL) += udp_tunnel.o
-obj-$(CONFIG_NET_IPVTI) += ip_vti.o
-obj-$(CONFIG_SYN_COOKIES) += syncookies.o
-obj-$(CONFIG_INET_AH) += ah4.o
-obj-$(CONFIG_INET_ESP) += esp4.o
-obj-$(CONFIG_INET_ESP_OFFLOAD) += esp4_offload.o
-obj-$(CONFIG_INET_IPCOMP) += ipcomp.o
-obj-$(CONFIG_INET_XFRM_TUNNEL) += xfrm4_tunnel.o
-obj-$(CONFIG_INET_XFRM_MODE_BEET) += xfrm4_mode_beet.o
-obj-$(CONFIG_INET_TUNNEL) += tunnel4.o
-obj-$(CONFIG_INET_XFRM_MODE_TRANSPORT) += xfrm4_mode_transport.o
-obj-$(CONFIG_INET_XFRM_MODE_TUNNEL) += xfrm4_mode_tunnel.o
-obj-$(CONFIG_IP_PNP) += ipconfig.o
-obj-$(CONFIG_NETFILTER)	+= netfilter.o netfilter/
-obj-$(CONFIG_INET_DIAG) += inet_diag.o 
-obj-$(CONFIG_INET_TCP_DIAG) += tcp_diag.o
-obj-$(CONFIG_INET_UDP_DIAG) += udp_diag.o
-obj-$(CONFIG_INET_RAW_DIAG) += raw_diag.o
-obj-$(CONFIG_NET_TCPPROBE) += tcp_probe.o
-obj-$(CONFIG_TCP_CONG_BBR) += tcp_bbr.o
-obj-$(CONFIG_TCP_CONG_BIC) += tcp_bic.o
-obj-$(CONFIG_TCP_CONG_CDG) += tcp_cdg.o
-obj-$(CONFIG_TCP_CONG_CUBIC) += tcp_cubic.o
-obj-$(CONFIG_TCP_CONG_DCTCP) += tcp_dctcp.o
-obj-$(CONFIG_TCP_CONG_WESTWOOD) += tcp_westwood.o
-obj-$(CONFIG_TCP_CONG_HSTCP) += tcp_highspeed.o
-obj-$(CONFIG_TCP_CONG_HYBLA) += tcp_hybla.o
-obj-$(CONFIG_TCP_CONG_HTCP) += tcp_htcp.o
-obj-$(CONFIG_TCP_CONG_VEGAS) += tcp_vegas.o
-obj-$(CONFIG_TCP_CONG_NV) += tcp_nv.o
-obj-$(CONFIG_TCP_CONG_VENO) += tcp_veno.o
-obj-$(CONFIG_TCP_CONG_SCALABLE) += tcp_scalable.o
-obj-$(CONFIG_TCP_CONG_LP) += tcp_lp.o
-obj-$(CONFIG_TCP_CONG_YEAH) += tcp_yeah.o
-obj-$(CONFIG_TCP_CONG_ILLINOIS) += tcp_illinois.o
-obj-$(CONFIG_TCP_CONG_WRAPPER) += tcp_ca_wrapper.o
-obj-$(CONFIG_NETLABEL) += cipso_ipv4.o
+tmp-$(CONFIG_COMPAT) 		:= compat.o
+obj-$(CONFIG_NET)		+= $(tmp-y)
 
-obj-$(CONFIG_XFRM) += xfrm4_policy.o xfrm4_state.o xfrm4_input.o \
-		      xfrm4_output.o xfrm4_protocol.o
+# LLC has to be linked before the files in net/802/
+obj-$(CONFIG_LLC)		+= llc/
+obj-$(CONFIG_NET)		+= ethernet/ 802/ sched/ netlink/ bpf/
+obj-$(CONFIG_NETFILTER)		+= netfilter/
+obj-$(CONFIG_INET)		+= ipv4/
+obj-$(CONFIG_XFRM)		+= xfrm/
+obj-$(CONFIG_UNIX)		+= unix/
+obj-$(CONFIG_NET)		+= ipv6/
+obj-$(CONFIG_PACKET)		+= packet/
+obj-$(CONFIG_NET_KEY)		+= key/
+obj-$(CONFIG_BRIDGE)		+= bridge/
+obj-$(CONFIG_NET_DSA)		+= dsa/
+obj-$(CONFIG_IPX)		+= ipx/
+obj-$(CONFIG_ATALK)		+= appletalk/
+obj-$(CONFIG_X25)		+= x25/
+obj-$(CONFIG_LAPB)		+= lapb/
+obj-$(CONFIG_NETROM)		+= netrom/
+obj-$(CONFIG_ROSE)		+= rose/
+obj-$(CONFIG_AX25)		+= ax25/
+obj-$(CONFIG_CAN)		+= can/
+obj-$(CONFIG_IRDA)		+= irda/
+obj-$(CONFIG_BT)		+= bluetooth/
+obj-$(CONFIG_SUNRPC)		+= sunrpc/
+obj-$(CONFIG_AF_RXRPC)		+= rxrpc/
+obj-$(CONFIG_AF_KCM)		+= kcm/
+obj-$(CONFIG_STREAM_PARSER)	+= strparser/
+obj-$(CONFIG_ATM)		+= atm/
+obj-$(CONFIG_L2TP)		+= l2tp/
+obj-$(CONFIG_DECNET)		+= decnet/
+obj-$(CONFIG_PHONET)		+= phonet/
+ifneq ($(CONFIG_VLAN_8021Q),)
+obj-y				+= 8021q/
+endif
+obj-$(CONFIG_IP_DCCP)		+= dccp/
+obj-$(CONFIG_IP_SCTP)		+= sctp/
+obj-$(CONFIG_RDS)		+= rds/
+obj-$(CONFIG_WIRELESS)		+= wireless/
+obj-$(CONFIG_MAC80211)		+= mac80211/
+obj-$(CONFIG_TIPC)		+= tipc/
+obj-$(CONFIG_NETLABEL)		+= netlabel/
+obj-$(CONFIG_IUCV)		+= iucv/
+obj-$(CONFIG_SMC)		+= smc/
+obj-$(CONFIG_RFKILL)		+= rfkill/
+obj-$(CONFIG_NET_9P)		+= 9p/
+obj-$(CONFIG_CAIF)		+= caif/
+ifneq ($(CONFIG_DCB),)
+obj-y				+= dcb/
+endif
+obj-$(CONFIG_6LOWPAN)		+= 6lowpan/
+obj-$(CONFIG_IEEE802154)	+= ieee802154/
+obj-$(CONFIG_MAC802154)		+= mac802154/
+
+ifeq ($(CONFIG_NET),y)
+obj-$(CONFIG_SYSCTL)		+= sysctl_net.o
+endif
+obj-$(CONFIG_WIMAX)		+= wimax/
+obj-$(CONFIG_DNS_RESOLVER)	+= dns_resolver/
+obj-$(CONFIG_CEPH_LIB)		+= ceph/
+obj-$(CONFIG_BATMAN_ADV)	+= batman-adv/
+obj-$(CONFIG_NFC)		+= nfc/
+obj-$(CONFIG_PSAMPLE)		+= psample/
+obj-$(CONFIG_NET_IFE)		+= ife/
+obj-$(CONFIG_OPENVSWITCH)	+= openvswitch/
+obj-$(CONFIG_VSOCKETS)	+= vmw_vsock/
+obj-$(CONFIG_MPLS)		+= mpls/
+obj-$(CONFIG_HSR)		+= hsr/
+ifneq ($(CONFIG_NET_SWITCHDEV),)
+obj-y				+= switchdev/
+endif
+ifneq ($(CONFIG_NET_L3_MASTER_DEV),)
+obj-y				+= l3mdev/
+endif
+obj-$(CONFIG_QRTR)		+= qrtr/
+obj-$(CONFIG_NET_NCSI)		+= ncsi/
+obj-$(CONFIG_CONGDB_MANAGER)    += congdb/
