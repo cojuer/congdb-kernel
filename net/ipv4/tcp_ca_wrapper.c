@@ -333,10 +333,13 @@ void tcp_ca_wrapper_use_sample(struct sock *sk, const struct rate_sample *rs, u3
         stats->beg_snd_nxt = tp->snd_nxt;
         if (inet_sk(sk)->inet_num == 45000) {
             pr_info(
-                "collect: RTTMIN %u RTTMAX %u RTTMDEV %u RETR %u DLV %u TIME %u",
+                "collect: RTTMIN %u RTTMAX %u RTTMDEV %u RTTVAR %u SRTT %u REOR %u RETR %u DLV %u TIME %u",
                 stats->rtt,
                 stats->rtt_max,
                 tp->mdev_us,
+                tp->rttvar_us,
+                tp->srtt_us,
+                tp->reordering,
                 tp->total_retrans,
                 tp->delivered,
                 // FIXME: probable overflow
