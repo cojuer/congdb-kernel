@@ -295,6 +295,14 @@ u32 tcp_ca_wrapper_undo_cwnd(struct sock *sk)
 
 void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 {
+    /* Some calls are for duplicates without timestamps */
+    if (sample->rtt_us < 0)
+        return;
+
+    /* Discard delay samples right after fast recovery */
+    if (ca->epoch_start && (s32)(tcp_time_stamp - ca->epoch_start) < HZ)
+        return;
+
     uint32_t vrtt;
 
     struct sock_ca_stats* stats = get_priv_ca_stats(sk);
