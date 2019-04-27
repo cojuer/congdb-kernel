@@ -114,7 +114,7 @@ struct sock_ca_stats* get_priv_ca_stats(struct sock *sk)
 }
 
 struct tcp_congestion_ops* get_inner_ops(struct sock *sk)
-{
+{   
     return ((struct tcp_cong_wr_ops*)(inet_csk(sk)->icsk_ca_ops))->inner;
 }
 
@@ -300,8 +300,8 @@ void tcp_ca_wrapper_pkts_acked(struct sock *sk, const struct ack_sample *sample)
         return;
 
     /* Discard delay samples right after fast recovery */
-    if (ca->epoch_start && (s32)(tcp_time_stamp - ca->epoch_start) < HZ)
-        return;
+    // if (ca->epoch_start && (s32)(tcp_time_stamp - ca->epoch_start) < HZ)
+    //     return;
 
     uint32_t vrtt;
 
